@@ -44,6 +44,8 @@ export interface StepFailure {
   code: string;
   /** The tool's own error text, for the help bundle (ISC-45). */
   detail?: string;
+  /** A finished step that Try again must run again first, because what it set up is gone (ISC-57). */
+  redo?: StepId;
 }
 
 export interface Step {

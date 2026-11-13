@@ -118,7 +118,7 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
       if (r.code !== 0) {
         if (/cancel+ed by the user|1223/i.test(out)) fail("VBOX-UAC", "Windows asked for permission to install VirtualBox, and it wasn't given.", "Press Try again, then click Yes when Windows asks."); // ISC-17
         const exitCode = out.match(/^\s*(\d+)\s*$/m)?.[1] ?? "unknown";
-        fail("VBOX-INSTALL", `The VirtualBox installer stopped with code ${exitCode}.`, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.");
+        fail("VBOX-INSTALL", `The VirtualBox installer stopped with code ${exitCode}.`, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", out.trim().slice(-600));
       }
       progress(0.95);
 

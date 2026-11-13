@@ -152,3 +152,27 @@ describe("server", () => {
     expect((await ok.json()).mode).toBe("local");
   });
 });
+
+describe("retry", () => {
+  test("ISC-57 a failure that names a step to redo makes Try again run that step first", async () => {
+    // VirtualBox's step finished, then VirtualBox went missing before PimpMyKali ran (help bundle, 2026-11-13).
+    const runs: string[] = [];
+    const vboxRuns = () => runs.filter((x) => x === "virtualbox").length;
+    const make = (id: string): Step => ({
+      id, ...STEP_INFO[id as keyof typeof STEP_INFO],
+      async run() {
+        runs.push(id);
+        if (id === "pimpmykali" && vboxRuns() < 2) throw Object.assign(new Error("x"), { failure: { code: "PMK-NOVBOX", what: "x", todo: "y", redo: "virtualbox" } });
+      },
+    } as Step);
+    const r = new Runner(cfg(), make as never);
+    r.start("full", ["virtualbox", "kali-download", "kali-import", "pimpmykali"]);
+    await until(() => r.state!.status !== "running");
+    expect(r.state!.failure?.code).toBe("PMK-NOVBOX");
+    r.retry();
+    await until(() => r.state!.status !== "running");
+    expect(vboxRuns()).toBe(2);
+    expect(r.state!.steps.pimpmykali.state).toBe("done");
+    expect(runs.filter((x) => x === "kali-import").length).toBe(1); // other finished steps are not redone
+  });
+});

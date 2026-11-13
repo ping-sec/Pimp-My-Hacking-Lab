@@ -203,7 +203,8 @@ export class Runner {
   retry(): RunState | null {
     const s = this.state;
     if (!s || s.status !== "failed") return s;
-    for (const id of s.plan) if (s.steps[id].state === "failed") s.steps[id] = { state: "waiting", progress: 0 };
+    const redo = s.failure?.redo;
+    for (const id of s.plan) if (s.steps[id].state === "failed" || id === redo) s.steps[id] = { state: "waiting", progress: 0 }; // ISC-57
     delete s.failure;
     s.status = "running";
     this.cfg.failAt = undefined;

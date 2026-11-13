@@ -70,7 +70,7 @@ export function kaliDownloadStep(sys: Sys, kali: Pin, sevenzr: Pin): Step {
 
 async function vbox(sys: Sys, args: string[], code: string, what: string): Promise<string> {
   const exe = sys.vboxManagePath();
-  if (!exe) return fail("KALI-NOVBOX", "VirtualBox isn't installed yet, so Kali can't be set up.", "Press Try again. Setup installs VirtualBox first.");
+  if (!exe) throw Object.assign(new Error("no VirtualBox"), { failure: { code: "KALI-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be set up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox" } satisfies StepFailure }); // ISC-57
   const r = await sys.exec([exe, ...args]);
   if (r.code !== 0) fail(code, what, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", (r.stderr || r.stdout).trim()); // ISC-45
   return r.stdout;
@@ -84,9 +84,17 @@ async function hostOnlyAdapter(sys: Sys): Promise<string> {
   if (existing) return existing;
   const out = await vbox(sys, ["hostonlyif", "create"], "KALI-NET", "The private lab network couldn't be created.");
   const name = out.match(/Interface '(.+?)' was successfully created/)?.[1];
-  if (!name) return fail("KALI-NET", "The private lab network couldn't be created.", "Restart your PC, open PEH Lab Setup, and press Try again.");
+  if (!name) return fail("KALI-NET", "The private lab network couldn't be created.", "Restart your PC, open PEH Lab Setup, and press Try again.", out.trim().slice(-600));
   await vbox(sys, ["hostonlyif", "ipconfig", name, "--ip", "192.168.56.1", "--netmask", "255.255.255.0"], "KALI-NET", "The private lab network couldn't be configured.");
   return name;
+}
+
+/** Kali's memory, CPUs and networks: NAT for the internet, host-only for the lab, never bridged (ISC-23, ISC-24). Kali must be off. */
+export async function applyKaliSettings(sys: Sys): Promise<void> {
+  const adapter = await hostOnlyAdapter(sys);
+  const ramGb = sys.ramGb ?? totalmem() / 1024 ** 3;
+  const memory = ramGb >= 15 ? 4096 : 2048;
+  await vbox(sys, ["modifyvm", KALI_VM_NAME, "--memory", String(memory), "--cpus", "2", "--nic1", "nat", "--nic2", "hostonly", "--hostonlyadapter2", adapter], "KALI-IMPORT", "Kali's memory and network couldn't be set.");
 }
 
 export function kaliImportStep(sys: Sys, kali: Pin): Step {
@@ -99,7 +107,7 @@ export function kaliImportStep(sys: Sys, kali: Pin): Step {
       if (hasVm(before, KALI_VM_NAME)) {
         // ISC-44: never re-register; finish a half-done import unless Kali is running right now.
         const info = await vbox(sys, ["showvminfo", KALI_VM_NAME, "--machinereadable"], "KALI-IMPORT", "VirtualBox couldn't read Kali's settings.");
-        if (/^VMState="running"/m.test(info)) { progress(1); return; }
+        if (/^VMState="running"/m.test(info)) { progress(1); return; } // the PimpMyKali step applies them after its shutdown (ISC-54)
       } else {
         const file = findVbox(sys);
         if (!file) return fail("KALI-MISSING", "The Kali files are missing, so there's nothing to set up yet.", "Press Try again. Setup downloads Kali first.");
@@ -109,11 +117,7 @@ export function kaliImportStep(sys: Sys, kali: Pin): Step {
         await vbox(sys, ["modifyvm", original, "--name", KALI_VM_NAME], "KALI-IMPORT", "Kali couldn't be renamed in VirtualBox.");
       }
       progress(0.4);
-      const adapter = await hostOnlyAdapter(sys);
-      progress(0.6);
-      const ramGb = sys.ramGb ?? totalmem() / 1024 ** 3;
-      const memory = ramGb >= 15 ? 4096 : 2048;
-      await vbox(sys, ["modifyvm", KALI_VM_NAME, "--memory", String(memory), "--cpus", "2", "--nic1", "nat", "--nic2", "hostonly", "--hostonlyadapter2", adapter], "KALI-IMPORT", "Kali's memory and network couldn't be set."); // ISC-23, ISC-24
+      await applyKaliSettings(sys); // ISC-23, ISC-24
       progress(0.9);
       const after = await vbox(sys, ["list", "vms"], "KALI-IMPORT", "VirtualBox didn't answer.");
       if (!hasVm(after, KALI_VM_NAME)) fail("KALI-VERIFY", "Kali was set up but VirtualBox doesn't list it.", "Restart your PC, open PEH Lab Setup, and press Try again.");

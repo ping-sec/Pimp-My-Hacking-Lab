@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PIMPMYKALI } from "../src/pins";
-import { pimpmykaliStep, PMK_DONE } from "../src/pimpmykali";
+import { pimpmykaliStep, PMK_DONE, pollScript, runCommand } from "../src/pimpmykali";
 import { KALI_VM_NAME } from "../src/kali";
 import type { Sys } from "../src/virtualbox";
 import type { StepFailure } from "../src/steps";
@@ -12,10 +12,10 @@ const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 /** A fake Kali: boots after `bootPolls` guest probes, finishes PMK after `runPolls` log polls. */
-function fakeSys(o: { bootPolls?: number; never?: boolean; runPolls?: number; logEnd?: string; dropouts?: number; acpiWorks?: boolean } = {}) {
+function fakeSys(o: { bootPolls?: number; never?: boolean; runPolls?: number; logEnd?: string; dropouts?: number; acpiWorks?: boolean; startErr?: string; savedMismatch?: boolean } = {}) {
   const cacheDir = mkdtempSync(join(tmpdir(), "pmk-")); dirs.push(cacheDir);
   const calls: string[][] = [];
-  let state = "poweroff", probes = 0, polls = 0, dropouts = o.dropouts ?? 0, started = false;
+  let state = o.savedMismatch ? "aborted-saved" : "poweroff", probes = 0, polls = 0, dropouts = o.dropouts ?? 0, started = false;
   const sys: Sys = {
     platform: "win32", env: {}, cacheDir,
     vboxManagePath: () => "C:\\VB\\VBoxManage.exe",
@@ -24,9 +24,12 @@ function fakeSys(o: { bootPolls?: number; never?: boolean; runPolls?: number; lo
       calls.push(argv);
       const [, cmd, vm, sub, ...rest] = argv;
       const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+      if (cmd === "list" && vm === "hostonlyifs") return ok("Name:            VirtualBox Host-Only Ethernet Adapter\n");
       if (cmd === "list") return ok(`"${KALI_VM_NAME}" {uuid}`);
       if (cmd === "showvminfo") return ok(`VMState="${state}"`);
-      if (cmd === "startvm") { state = "running"; return ok(); }
+      if (cmd === "discardstate") { state = "poweroff"; return ok(); }
+      if (cmd === "startvm" && state.includes("saved") && o.savedMismatch) return { code: 1, stdout: "", stderr: "VBoxManage.exe: error: apic#0: Config mismatch - uApicMode: saved=2 config=3 [ver=5 pass=final] (VERR_SSM_LOAD_CONFIG_MISMATCH)" };
+      if (cmd === "startvm") { if (o.startErr) return { code: 1, stdout: "", stderr: o.startErr }; state = "running"; return ok(); }
       if (cmd === "controlvm" && vm === KALI_VM_NAME && sub === "acpipowerbutton") { if (o.acpiWorks !== false) state = "poweroff"; return ok(); }
       if (cmd === "controlvm" && sub === "poweroff") { state = "poweroff"; return ok(); }
       if (cmd === "guestcontrol") {
@@ -113,5 +116,76 @@ describe("PimpMyKali step", () => {
     const stuck = fakeSys({ acpiWorks: false });
     expect((await run(stuck.sys)).ok).toBe(true);
     expect(stuck.calls.some((c) => c[1] === "controlvm" && c[3] === "poweroff")).toBe(true);
+  });
+});
+
+/** A real bash run of the real launch and poll commands, against a stand-in pimpmykali.sh. */
+async function bash(cmd: string, env: Record<string, string>) {
+  const p = Bun.spawn(["bash", "-c", cmd], { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  await p.exited;
+  return out + err;
+}
+function realKali() {
+  const d = mkdtempSync(join(tmpdir(), "pmk-real-")); dirs.push(d);
+  mkdirSync(join(d, "bin"));
+  // PimpMyKali's own first move: finduser=$(logname)
+  writeFileSync(join(d, "pimpmykali.sh"), '#!/bin/sh\nfinduser=$(logname 2>/dev/null)\necho "user=[$finduser] args=$*"\nsleep 1\necho "All Done! Happy Hacking!"\n');
+  chmodSync(join(d, "pimpmykali.sh"), 0o755);
+  // sudo stand-in: take the password from stdin (-S), then run the command
+  writeFileSync(join(d, "bin", "sudo"), '#!/bin/sh\n[ "$1" = "-S" ] && { read _pw; shift; }\nexec "$@"\n');
+  chmodSync(join(d, "bin", "sudo"), 0o755);
+  const o = { dir: d, log: join(d, "pmk.log"), pid: join(d, "pmk.pid"), shim: join(d, ".peh-shim") };
+  return { d, o, env: { PATH: `${join(d, "bin")}:${process.env.PATH}` } };
+}
+
+describe("PimpMyKali in real bash", () => {
+  test("ISC-52 PimpMyKali gets the guest user from logname, for that run only", async () => {
+    const { o, env } = realKali();
+    await bash(runCommand(o), env);
+    expect(existsSync(join(o.shim, "logname"))).toBe(true); // present while it runs
+    for (let i = 0; i < 50 && (await bash(pollScript(o), env)).includes("PEH_RUNNING"); i++) await Bun.sleep(100);
+    const log = readFileSync(o.log, "utf8");
+    expect(log).toContain("user=[kali] args=--autonoroot");
+    expect(log).toContain("All Done! Happy Hacking!");
+    expect(existsSync(o.shim)).toBe(false); // gone afterwards
+    expect(runCommand(o)).not.toMatch(/\/usr\/(local\/)?s?bin\/logname/); // never installed system-wide
+  });
+  test("ISC-53 the real poll sees PimpMyKali run and then stop, by PID", async () => {
+    const { o, env } = realKali();
+    expect(pollScript(o)).not.toContain("pgrep");
+    expect(await bash(pollScript(o), env)).toContain("PEH_STOPPED"); // nothing launched yet
+    await bash(runCommand(o), env);
+    expect(await bash(pollScript(o), env)).toContain("PEH_RUNNING");
+    let polls = 0;
+    while ((await bash(pollScript(o), env)).includes("PEH_RUNNING")) { if (++polls > 50) throw new Error("never stopped"); await Bun.sleep(100); }
+    expect(polls).toBeLessThan(30); // the script sleeps 1 s, so it stops within ~1 s of polls
+    // The bug this replaces: a command-line match finds the poll itself.
+    expect(await bash("if pgrep -f pimpmykali.sh >/dev/null; then echo PEH_RUNNING; else echo PEH_STOPPED; fi", env)).toContain("PEH_RUNNING");
+  });
+  test("ISC-54 after the shutdown Kali gets its memory, CPUs and both networks", async () => {
+    const { sys, calls } = fakeSys();
+    expect((await run(sys)).ok).toBe(true);
+    const off = calls.findIndex((c) => c[1] === "controlvm" && (c[3] === "acpipowerbutton" || c[3] === "poweroff"));
+    const set = calls.findIndex((c) => c[1] === "modifyvm" && c.includes("--nic2"));
+    expect(off).toBeGreaterThan(-1);
+    expect(set).toBeGreaterThan(off);
+    const args = calls[set];
+    expect(args).toEqual(expect.arrayContaining(["--cpus", "2", "--nic1", "nat", "--nic2", "hostonly"]));
+    expect(args).not.toContain("bridged");
+  });
+  test("ISC-55 a failed start keeps VirtualBox's own error text for the help bundle", async () => {
+    const err = 'VBoxManage.exe: error: The machine "Kali (PEH)" is already locked by a session (or being locked or unlocked)';
+    const r = await run(fakeSys({ startErr: err }).sys);
+    expect(r.failure!.code).toBe("PMK-START");
+    expect(r.failure!.detail).toContain("already locked by a session");
+  });
+  test("ISC-56 a saved Kali that won't restore is discarded and booted fresh, once", async () => {
+    const { sys, calls } = fakeSys({ savedMismatch: true });
+    expect((await run(sys)).ok).toBe(true);
+    const i = calls.findIndex((c) => c[1] === "discardstate");
+    expect(i).toBeGreaterThan(-1);
+    expect(calls.slice(i).some((c) => c[1] === "startvm")).toBe(true);
+    expect(calls.filter((c) => c[1] === "discardstate").length).toBe(1);
   });
 });

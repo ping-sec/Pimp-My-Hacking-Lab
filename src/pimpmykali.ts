@@ -8,7 +8,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { KALI_VM_NAME } from "./kali";
+import { applyKaliSettings, KALI_VM_NAME } from "./kali";
 import type { Pin } from "./pins";
 import { STEP_INFO, type Step, type StepFailure } from "./steps";
 import type { Sys } from "./virtualbox";
@@ -17,13 +17,20 @@ export const PMK_DONE = "pimpmykali.done";
 /** Kali's public default login for the pre-built image. */
 const GUEST_USER = "kali", GUEST_PASS = "kali";
 const LOG = "/home/kali/peh-pimpmykali.log";
+const PID = "/home/kali/peh-pimpmykali.pid";
+const SHIM = "/home/kali/.peh-shim";
+/** Where the launch writes; tests point these at a temp dir. */
+export interface RunPaths { dir: string; log: string; pid: string; shim: string }
+const KALI_PATHS: RunPaths = { dir: "/home/kali", log: LOG, pid: PID, shim: SHIM };
 const SUCCESS = "All Done! Happy Hacking!";
 
 const fail = (code: string, what: string, todo: string, detail?: string): never => { throw Object.assign(new Error(what), { failure: { code, what, todo, ...(detail ? { detail } : {}) } satisfies StepFailure }); };
 const errText = (r: { stdout: string; stderr: string }) => (r.stderr || r.stdout).trim();
 
 function manage(sys: Sys): string {
-  return sys.vboxManagePath() ?? fail("PMK-NOVBOX", "VirtualBox isn't installed yet, so Kali can't be fixed up.", "Press Try again. Setup installs VirtualBox first.");
+  const exe = sys.vboxManagePath();
+  if (exe) return exe;
+  throw Object.assign(new Error("no VirtualBox"), { failure: { code: "PMK-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be fixed up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox" } satisfies StepFailure }); // ISC-57
 }
 async function vm(sys: Sys, args: string[]) { return sys.exec([manage(sys), ...args]); }
 async function vmState(sys: Sys): Promise<string> {
@@ -37,6 +44,27 @@ async function guest(sys: Sys, script: string) {
 }
 const sh = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
+/**
+ * Starts PimpMyKali detached as root and records its PID (ISC-28, ISC-53). PimpMyKali reads its user from
+ * `logname`, which is empty without a login session, so this run gets a `logname` that answers the guest user
+ * from a shim directory first on its PATH; the shim is removed when the run ends (ISC-52).
+ */
+export function runCommand(o: RunPaths = KALI_PATHS): string {
+  const path = `${o.shim}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
+  const inner = `echo ${GUEST_PASS} | sudo -S env PATH=${sh(path)} ./pimpmykali.sh --autonoroot; rm -rf ${sh(o.shim)}`;
+  return [
+    `cd ${sh(o.dir)}`,
+    `mkdir -p ${sh(o.shim)} && printf '#!/bin/sh\\necho ${GUEST_USER}\\n' > ${sh(`${o.shim}/logname`)} && chmod 755 ${sh(`${o.shim}/logname`)}`,
+    `nohup sh -c ${sh(inner)} > ${sh(o.log)} 2>&1 < /dev/null &`,
+    `echo $! > ${sh(o.pid)}`,
+  ].join("\n");
+}
+
+/** The log tail, then whether the recorded PID is still alive; a command-line match would find the poll itself (ISC-53). */
+export function pollScript(o: Pick<RunPaths, "log" | "pid"> = KALI_PATHS): string {
+  return `tail -c 3000 ${sh(o.log)} 2>/dev/null; p=$(cat ${sh(o.pid)} 2>/dev/null); if [ -n "$p" ] && [ -d "/proc/$p" ]; then echo PEH_RUNNING; else echo PEH_STOPPED; fi`;
+}
+
 export function launchScript(pin: Pin): string {
   // Download the pinned script, check its SHA-256, then start it detached as root.
   return [
@@ -44,11 +72,11 @@ export function launchScript(pin: Pin): string {
     `curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 --speed-limit 1024 --speed-time 60 -o pimpmykali.sh ${sh(pin.url)}`,
     `echo ${sh(`${pin.sha256}  pimpmykali.sh`)} | sha256sum -c -`,
     "chmod +x pimpmykali.sh",
-    `nohup sh -c ${sh(`echo ${GUEST_PASS} | sudo -S ./pimpmykali.sh --autonoroot`)} > ${LOG} 2>&1 < /dev/null &`,
+    runCommand(),
     "echo PEH_STARTED",
   ].join("\n");
 }
-const POLL = `tail -c 3000 ${LOG} 2>/dev/null; if pgrep -f pimpmykali.sh >/dev/null; then echo PEH_RUNNING; else echo PEH_STOPPED; fi`;
+const POLL = pollScript();
 
 export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: number; runTimeoutMs?: number; pollMs?: number } = {}): Step {
   const sleep = sys.sleep ?? ((ms: number) => Bun.sleep(ms));
@@ -65,9 +93,16 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
       if (!list.stdout.includes(`"${KALI_VM_NAME}"`)) fail("PMK-NOVM", "Kali isn't set up yet, so it can't be fixed up.", "Press Try again. Setup creates Kali first.");
 
       // ISC-27: boot with no window, wait for the guest tools to answer.
-      if ((await vmState(sys)) !== "running") {
-        const r = await vm(sys, ["startvm", KALI_VM_NAME, "--type", "headless"]);
-        if (r.code !== 0) fail("PMK-START", "Kali couldn't be started.", "Restart your PC, open PEH Lab Setup, and press Try again.");
+      const before = await vmState(sys);
+      if (before !== "running") {
+        let r = await vm(sys, ["startvm", KALI_VM_NAME, "--type", "headless"]);
+        // ISC-56: a state saved under a different VirtualBox engine (Hyper-V vs VT-x) can't be restored;
+        // the install has nothing worth keeping in RAM, so discard it once and boot fresh.
+        if (r.code !== 0 && before.includes("saved")) {
+          await vm(sys, ["discardstate", KALI_VM_NAME]);
+          r = await vm(sys, ["startvm", KALI_VM_NAME, "--type", "headless"]);
+        }
+        if (r.code !== 0) fail("PMK-START", "Kali couldn't be started.", "Restart your PC, open PEH Lab Setup, and press Try again.", errText(r)); // ISC-55
       }
       const bootPolls = Math.max(1, Math.ceil(bootTimeout / 5000));
       let ready = false, lastErr = "";
@@ -109,6 +144,12 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
       let off = false;
       for (let i = 0; i < 36 && !off; i++) { await sleep(5000); off = (await vmState(sys)) === "poweroff"; }
       if (!off) await vm(sys, ["controlvm", KALI_VM_NAME, "poweroff"]);
+      // ISC-54: Kali may have been running at import, which leaves its settings to now. VirtualBox can hold the
+      // machine lock for a few seconds after power-off, so a refused change is tried again.
+      for (let i = 0; ; i++) {
+        try { await applyKaliSettings(sys); break; }
+        catch (e) { if (i >= 5) throw e; await sleep(5000); }
+      }
       mkdirSync(sys.cacheDir, { recursive: true });
       writeFileSync(marker, `${pin.build}\n`);
       progress(1);
