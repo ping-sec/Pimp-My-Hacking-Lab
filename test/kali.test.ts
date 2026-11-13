@@ -16,7 +16,7 @@ const ARCHIVE = bytes("fake kali 7z"), SEVEN = bytes("fake 7zr.exe");
 const kaliPin = { ...KALI, sha256: sha(ARCHIVE) };
 const sevenPin = { ...SEVENZR, sha256: sha(SEVEN) };
 
-function fakeSys(o: { archive?: Uint8Array; extractCode?: number; vms?: string[]; ramGb?: number; running?: boolean; modifyErr?: string } = {}) {
+function fakeSys(o: { archive?: Uint8Array; extractCode?: number; vms?: string[]; ramGb?: number; running?: boolean; modifyErr?: string; noNetDriver?: boolean } = {}) {
   const cacheDir = mkdtempSync(join(tmpdir(), "kali-")); dirs.push(cacheDir);
   const calls: string[][] = [];
   const vms = new Set(o.vms ?? []);
@@ -39,7 +39,8 @@ function fakeSys(o: { archive?: Uint8Array; extractCode?: number; vms?: string[]
       if (cmd === "modifyvm" && rest.includes("--name")) { vms.delete(rest[0]); vms.add(rest[rest.indexOf("--name") + 1]); }
       if (cmd === "showvminfo") return { code: 0, stdout: `VMState="${o.running ? "running" : "poweroff"}"`, stderr: "" };
       if (cmd === "modifyvm" && o.modifyErr && rest.includes("--memory")) return { code: 1, stdout: "", stderr: o.modifyErr };
-      if (cmd === "list" && rest[0] === "hostonlyifs") return { code: 0, stdout: "Name: VirtualBox Host-Only Ethernet Adapter\nIPAddress: 192.168.56.1\n", stderr: "" };
+      if (cmd === "list" && rest[0] === "hostonlyifs") return { code: 0, stdout: o.noNetDriver ? "" : "Name: VirtualBox Host-Only Ethernet Adapter\nIPAddress: 192.168.56.1\n", stderr: "" };
+      if (cmd === "hostonlyif" && rest[0] === "create" && o.noNetDriver) return { code: 1, stdout: "0%...", stderr: "VBoxManage.exe: error: Failed to create the host-only adapter\nVBoxManage.exe: error: Could not find Host Interface Networking driver! Please reinstall" };
       return { code: 0, stdout: "", stderr: "" };
     },
     fetch: (async (url: string) => { fetched.push(String(url)); const b = String(url).endsWith("7zr.exe") ? SEVEN : (o.archive ?? ARCHIVE); return new Response(b, { headers: { "content-length": String(b.length) } }); }) as unknown as typeof fetch,
@@ -121,5 +122,16 @@ describe("Kali download + import", () => {
     expect(mod).toContain("--nic2 hostonly");
     expect(mod).toContain("--hostonlyadapter2 VirtualBox Host-Only Ethernet Adapter");
     expect(mod).not.toMatch(/bridged/);
+  });
+});
+
+describe("missing network driver", () => {
+  test("ISC-62 KALI-NET for a missing host-only driver names the VirtualBox step to redo, keeping VirtualBox's error", async () => {
+    const { applyKaliSettings } = await import("../src/kali");
+    const { sys } = fakeSys({ noNetDriver: true });
+    const e = await applyKaliSettings(sys).catch((x) => x);
+    expect(e.failure.code).toBe("KALI-NET");
+    expect(e.failure.redo).toBe("virtualbox");
+    expect(e.failure.detail).toContain("Host Interface Networking driver");
   });
 });

@@ -2,8 +2,8 @@
  * Real "Install VirtualBox" step (F4). Everything the machine does goes through `Sys`, so the
  * step is tested on any OS with a fake Windows and runs for real only on Windows.
  */
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join, win32 } from "node:path";
 import { downloadResumable, sha256File } from "./download";
 import type { Pin } from "./pins";
 import { STEP_INFO, type Step, type StepFailure, type StepQuestion } from "./steps";
@@ -14,6 +14,10 @@ export interface Sys {
   cacheDir: string;
   /** Where VBoxManage.exe lives when VirtualBox is installed, else null. */
   vboxManagePath(): string | null;
+  /** The folders the last lookup searched, for the help bundle (ISC-58). */
+  vboxSearched?(): string[];
+  /** What VirtualBox's host-only network driver lacks (ISC-62): nothing, its files, or its Windows driver-store entry. Absent means "ok". */
+  hostOnlyDriver?(): "ok" | "files" | "store";
   exec(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
   fetch: typeof fetch;
   /** Installed memory in GB (defaults to this PC's). */
@@ -22,16 +26,38 @@ export interface Sys {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export function realSys(cacheDir: string): Sys {
-  const env = process.env;
+/** VirtualBox's own record of where it is installed (HKLM\SOFTWARE\Oracle\VirtualBox InstallDir); null when absent. */
+function registryInstallDir(): string | null {
+  if (process.platform !== "win32") return null;
+  try {
+    const r = Bun.spawnSync(["reg", "query", "HKLM\\SOFTWARE\\Oracle\\VirtualBox", "/v", "InstallDir"], { stdout: "pipe", stderr: "pipe", windowsHide: true });
+    return r.stdout.toString().match(/InstallDir\s+REG_\w+\s+(.+?)\s*$/m)?.[1] ?? null;
+  } catch { return null; }
+}
+
+export function realSys(cacheDir: string, o: { env?: Record<string, string | undefined>; regInstallDir?: () => string | null } = {}): Sys {
+  const env = o.env ?? process.env;
+  const reg = o.regInstallDir ?? registryInstallDir;
+  let found: string | null = null, searched: string[] = [];
+  const vboxManagePath = () => {
+    if (found) return found; // ISC-58: kept for the run once found
+    searched = [...new Set([reg(), env.VBOX_MSI_INSTALL_PATH, env.ProgramFiles && join(env.ProgramFiles, "Oracle", "VirtualBox"), "C:\\Program Files\\Oracle\\VirtualBox"].filter(Boolean) as string[])];
+    for (const d of searched) { const p = join(d, "VBoxManage.exe"); if (existsSync(p)) return (found = p); }
+    return null;
+  };
   return {
     platform: process.platform,
     env,
     cacheDir,
-    vboxManagePath() {
-      const dirs = [env.VBOX_MSI_INSTALL_PATH, env.ProgramFiles && join(env.ProgramFiles, "Oracle", "VirtualBox"), "C:\\Program Files\\Oracle\\VirtualBox"].filter(Boolean) as string[];
-      for (const d of dirs) { const p = join(d, "VBoxManage.exe"); if (existsSync(p)) return p; }
-      return null;
+    vboxManagePath,
+    vboxSearched: () => searched,
+    // ISC-62: the VBoxNetworkAdp feature's key file (VBoxMergeNetAdp6.wxi), then the driver as Windows knows it.
+    hostOnlyDriver() {
+      const exe = vboxManagePath();
+      if (!exe || !existsSync(join(dirname(exe), "drivers", "network", "netadp6", "VBoxNetAdp6.sys"))) return "files";
+      const repo = join(env.SystemRoot ?? env.windir ?? "C:\\Windows", "System32", "DriverStore", "FileRepository");
+      try { return readdirSync(repo).some((n) => /^vboxnetadp6\.inf_/i.test(n)) ? "ok" : "store"; }
+      catch { return "ok"; } // unreadable here: let KALI-NET speak instead of blocking
     },
     async exec(argv) {
       const p = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", windowsHide: true });
@@ -42,7 +68,8 @@ export function realSys(cacheDir: string): Sys {
   };
 }
 
-const fail = (code: string, what: string, todo: string): never => { throw Object.assign(new Error(what), { failure: { code, what, todo } satisfies StepFailure }); };
+// The detail is the tool's own evidence for the help bundle (ISC-45, ISC-55, ISC-62); dropping it left VBOX-NET silent.
+const fail = (code: string, what: string, todo: string, detail?: string): never => { throw Object.assign(new Error(what), { failure: { code, what, todo, ...(detail ? { detail } : {}) } satisfies StepFailure }); };
 
 /** "7.2.22r175245" → [7,2,22]; null when unreadable. */
 export function parseVersion(s: string): number[] | null {
@@ -83,9 +110,21 @@ async function confirmUpgrade(sys: Sys, have: number[], pin: Pin, confirmed: boo
 const psq = (s: string) => `'${s.replaceAll("'", "''")}'`;
 
 export function installerCommand(installer: string): string[] {
-  const args = ["--silent", "--ignore-reboot", "--msiparams", "ADDLOCAL=VBoxApplication,VBoxUSB,VBoxNetwork", "VBOX_START=0", "VBOX_INSTALLQUICKLAUNCHSHORTCUT=0"];
+  const args = ["--silent", "--ignore-reboot", "--msiparams", "ADDLOCAL=VBoxApplication,VBoxUSB,VBoxNetwork,VBoxNetworkFlt,VBoxNetworkAdp", "VBOX_START=0", "VBOX_INSTALLQUICKLAUNCHSHORTCUT=0"];
   // One Windows permission prompt; -PassThru gives the installer's exit code. 3010 = done, restart later.
   const script = `$p = Start-Process -FilePath ${psq(installer)} -ArgumentList ${args.map(psq).join(",")} -Verb RunAs -Wait -PassThru; Write-Output $p.ExitCode; if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) { exit 0 } else { exit 1 }`;
+  return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script];
+}
+
+/**
+ * Registers VirtualBox's host-only driver with Windows from its install folder, behind one permission prompt (ISC-62).
+ * An elevated process can't pipe its output back, so cmd writes pnputil's output to `outFile` for the help bundle.
+ * The cmd line goes as one string: Windows PowerShell joins an -ArgumentList array without quoting its parts.
+ */
+export function pnputilCommand(vboxDir: string, outFile: string): string[] {
+  const inf = win32.join(vboxDir, "drivers", "network", "netadp6", "VBoxNetAdp6.inf");
+  const line = `/c pnputil /add-driver "${inf}" /install > "${outFile}" 2>&1`;
+  const script = `$p = Start-Process -FilePath 'cmd.exe' -ArgumentList ${psq(line)} -Verb RunAs -Wait -PassThru; Write-Output $p.ExitCode; exit 0`;
   return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script];
 }
 
@@ -97,34 +136,57 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
       if (sys.platform !== "win32") fail("VBOX-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
       const want = parseVersion(pin.version)!;
       const have = await installedVersion(sys);
-      if (have && atLeast(have, want)) { progress(1); return; } // ISC-14
-      if (have) await confirmUpgrade(sys, have, pin, confirmed === true); // ISC-46..48
+      const current = !!have && atLeast(have, want);
+      const driver = () => sys.hostOnlyDriver?.() ?? "ok"; // ISC-62
+      if (current && driver() === "ok") { progress(1); return; } // ISC-14
+      // ISC-62: the detail always says which check failed, so a bundle is never silent about it.
+      const netFail = (extra = ""): never => fail("VBOX-NET", "VirtualBox is installed, but its private-network driver is missing.", "Open Windows Settings > Apps, choose Oracle VirtualBox > Modify, turn on Host-Only Networking, then press Try again.", `Driver check: ${driver()} (files = VBoxNetAdp6.sys missing; store = not in Windows' driver store). ${extra}`.trim());
+      // ISC-62: the pinned installer can add missing driver files to the same version, never to a newer one.
+      if (current && driver() === "files" && have!.join(".") !== want.join(".")) netFail();
+      if (have && !current) await confirmUpgrade(sys, have, pin, confirmed === true); // ISC-46..48
       progress(0.02);
+      if (!current || driver() === "files") await install();
 
-      mkdirSync(sys.cacheDir, { recursive: true });
-      const dest = join(sys.cacheDir, pin.file);
-      if (!(existsSync(dest) && (await sha256File(dest)) === pin.sha256)) {
-        rmSync(dest, { force: true });
-        await downloadResumable(sys, pin.url, dest, { signal, code: "VBOX-DL", label: "VirtualBox", progress: (f) => progress(0.02 + 0.68 * f) }); // ISC-38..40
-        if ((await sha256File(dest)) !== pin.sha256) { // ISC-15
-          rmSync(dest, { force: true });
-          fail("VBOX-SHA", "The VirtualBox download was damaged on the way, so we threw it away.", "Press Try again to download a fresh copy.");
-        }
+      // ISC-62: VirtualBox installs the driver into Windows only on a first install (VirtualBox.wxs: NOT Installed),
+      // so a driver whose files are present but unregistered is added with pnputil.
+      if (driver() === "store") {
+        mkdirSync(sys.cacheDir, { recursive: true });
+        const outFile = join(sys.cacheDir, "pnputil.txt");
+        rmSync(outFile, { force: true });
+        const r = await sys.exec(pnputilCommand(win32.dirname(sys.vboxManagePath()!), outFile));
+        const out = `${r.stdout}\n${r.stderr}`;
+        if (r.code !== 0 && /cancel+ed by the user|1223/i.test(out)) fail("VBOX-UAC", "Windows asked for permission to add VirtualBox's network driver, and it wasn't given.", "Press Try again, then click Yes when Windows asks.");
+        const said = existsSync(outFile) ? readFileSync(outFile, "utf8").replace(/\s+/g, " ").trim() : "(no output file)";
+        if (driver() !== "ok") netFail(`pnputil exit ${r.stdout.trim() || "unknown"}${r.stderr.trim() ? ` (${r.stderr.trim()})` : ""}: ${said}`.slice(0, 600));
       }
-      progress(0.75);
-
-      const r = await sys.exec(installerCommand(dest)); // ISC-16
-      const out = `${r.stdout}\n${r.stderr}`;
-      if (r.code !== 0) {
-        if (/cancel+ed by the user|1223/i.test(out)) fail("VBOX-UAC", "Windows asked for permission to install VirtualBox, and it wasn't given.", "Press Try again, then click Yes when Windows asks."); // ISC-17
-        const exitCode = out.match(/^\s*(\d+)\s*$/m)?.[1] ?? "unknown";
-        fail("VBOX-INSTALL", `The VirtualBox installer stopped with code ${exitCode}.`, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", out.trim().slice(-600));
-      }
-      progress(0.95);
-
-      const after = await installedVersion(sys); // ISC-18
-      if (!after || !atLeast(after, want)) fail("VBOX-VERIFY", "VirtualBox finished installing but doesn't answer yet.", "Restart your PC, then open PEH Lab Setup again. It picks up where it left off.");
+      if (driver() !== "ok") netFail();
       progress(1);
+
+      async function install() {
+        mkdirSync(sys.cacheDir, { recursive: true });
+        const dest = join(sys.cacheDir, pin.file);
+        if (!(existsSync(dest) && (await sha256File(dest)) === pin.sha256)) {
+          rmSync(dest, { force: true });
+          await downloadResumable(sys, pin.url, dest, { signal, code: "VBOX-DL", label: "VirtualBox", progress: (f) => progress(0.02 + 0.68 * f) }); // ISC-38..40
+          if ((await sha256File(dest)) !== pin.sha256) { // ISC-15
+            rmSync(dest, { force: true });
+            fail("VBOX-SHA", "The VirtualBox download was damaged on the way, so we threw it away.", "Press Try again to download a fresh copy.");
+          }
+        }
+        progress(0.75);
+
+        const r = await sys.exec(installerCommand(dest)); // ISC-16
+        const out = `${r.stdout}\n${r.stderr}`;
+        if (r.code !== 0) {
+          if (/cancel+ed by the user|1223/i.test(out)) fail("VBOX-UAC", "Windows asked for permission to install VirtualBox, and it wasn't given.", "Press Try again, then click Yes when Windows asks."); // ISC-17
+          const exitCode = out.match(/^\s*(\d+)\s*$/m)?.[1] ?? "unknown";
+          fail("VBOX-INSTALL", `The VirtualBox installer stopped with code ${exitCode}.`, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", out.trim().slice(-600));
+        }
+        progress(0.95);
+
+        const after = await installedVersion(sys); // ISC-18
+        if (!after || !atLeast(after, want)) fail("VBOX-VERIFY", "VirtualBox finished installing but doesn't answer yet.", "Restart your PC, then open PEH Lab Setup again. It picks up where it left off.");
+      }
     },
   };
 }

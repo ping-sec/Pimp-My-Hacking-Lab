@@ -55,7 +55,7 @@ export function defaultConfig(): Config {
     downloadsDir: join(home, "Downloads"),
     labsFilePattern: /peh.*(web|lab).*\.(zip|7z|tar\.gz)$/i,
     labsSha256: null,
-    labsPageUrl: "https://academy.tcm-sec.com/",
+    labsPageUrl: "https://tcm-sec.com/academy/practical-ethical-hacking/",
     msPerMinute: Number(process.env.PEH_SIM_MS_PER_MIN ?? 400),
     realSteps: new Set(platform() === "win32" && !process.argv.includes("--simulate") ? ["virtualbox", "kali-download", "kali-import", "pimpmykali"] : []),
   };

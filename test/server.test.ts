@@ -176,3 +176,13 @@ describe("retry", () => {
     expect(runs.filter((x) => x === "kali-import").length).toBe(1); // other finished steps are not redone
   });
 });
+
+describe("course page", () => {
+  test("ISC-6 Open the course page goes to the Practical Ethical Hacking course, in real runs and the demo", async () => {
+    const url = "https://tcm-sec.com/academy/practical-ethical-hacking/";
+    expect(defaultConfig().labsPageUrl).toBe(url);
+    const html = await Bun.file(new URL("../ui/index.html", import.meta.url)).text();
+    expect(html).toContain(`pageUrl: "${url}"`);
+    expect(html).not.toContain("academy.tcm-sec.com");
+  });
+});

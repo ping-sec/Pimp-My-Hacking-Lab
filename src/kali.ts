@@ -70,7 +70,7 @@ export function kaliDownloadStep(sys: Sys, kali: Pin, sevenzr: Pin): Step {
 
 async function vbox(sys: Sys, args: string[], code: string, what: string): Promise<string> {
   const exe = sys.vboxManagePath();
-  if (!exe) throw Object.assign(new Error("no VirtualBox"), { failure: { code: "KALI-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be set up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox" } satisfies StepFailure }); // ISC-57
+  if (!exe) throw Object.assign(new Error("no VirtualBox"), { failure: { code: "KALI-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be set up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox", detail: `Looked for VBoxManage.exe in: ${(sys.vboxSearched?.() ?? []).join("; ") || "nowhere"}` } satisfies StepFailure }); // ISC-57, ISC-58
   const r = await sys.exec([exe, ...args]);
   if (r.code !== 0) fail(code, what, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", (r.stderr || r.stdout).trim()); // ISC-45
   return r.stdout;
@@ -82,7 +82,13 @@ async function hostOnlyAdapter(sys: Sys): Promise<string> {
   const list = await vbox(sys, ["list", "hostonlyifs"], "KALI-NET", "The private lab network couldn't be checked.");
   const existing = list.match(/^Name:\s+(.+)$/m)?.[1]?.trim();
   if (existing) return existing;
-  const out = await vbox(sys, ["hostonlyif", "create"], "KALI-NET", "The private lab network couldn't be created.");
+  const created = await sys.exec([sys.vboxManagePath() ?? "VBoxManage.exe", "hostonlyif", "create"]);
+  const text = `${created.stdout}\n${created.stderr}`.trim();
+  if (/Host Interface Networking driver/i.test(text)) { // ISC-62: VirtualBox was installed without its host-only driver
+    throw Object.assign(new Error("no host-only driver"), { failure: { code: "KALI-NET", what: "VirtualBox's private-network driver is missing, so the lab network couldn't be created.", todo: "Press Try again. Setup adds the driver to VirtualBox first (Windows asks once).", detail: text.slice(-600), redo: "virtualbox" } satisfies StepFailure });
+  }
+  if (created.code !== 0) fail("KALI-NET", "The private lab network couldn't be created.", "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", text.slice(-600));
+  const out = created.stdout;
   const name = out.match(/Interface '(.+?)' was successfully created/)?.[1];
   if (!name) return fail("KALI-NET", "The private lab network couldn't be created.", "Restart your PC, open PEH Lab Setup, and press Try again.", out.trim().slice(-600));
   await vbox(sys, ["hostonlyif", "ipconfig", name, "--ip", "192.168.56.1", "--netmask", "255.255.255.0"], "KALI-NET", "The private lab network couldn't be configured.");
