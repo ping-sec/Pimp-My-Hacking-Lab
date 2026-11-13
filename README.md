@@ -1,8 +1,8 @@
 # Pimp My Hacking Lab
 
-One double-click on Windows sets up a beginner ethical hacking lab: VirtualBox, a Kali Linux VM, and [PimpMyKali](https://github.com/Dewalt-arch/pimpmykali) to patch it, with the Practical Ethical Hacking web-app labs on the way.
+One double-click on Windows sets up a beginner ethical hacking lab: VirtualBox, a Kali Linux VM, and [PimpMyKali](https://github.com/TCM-Security/pimpmykali) to patch it, with the Practical Ethical Hacking web-app labs on the way.
 
-> The name is a nod to **Dewalt**, who wrote PimpMyKali and has been fixing broken Kali installs for students for years. This tool runs his script; it doesn't replace it. Go star [his repo](https://github.com/Dewalt-arch/pimpmykali).
+> The name is a nod to **Dewalt**, who wrote PimpMyKali and has been fixing broken Kali installs for students for years. This tool runs his script; it doesn't replace it. Go star [the repo](https://github.com/TCM-Security/pimpmykali).
 
 ⚠️ **Testing release.** This is an early build for testers. Run it on a PC (or a Windows VM) you don't mind experimenting on, and please report what happens.
 
@@ -38,7 +38,7 @@ bun run build:win        # dist/peh-lab-setup.exe
 
 ## Credits
 
-- [PimpMyKali](https://github.com/Dewalt-arch/pimpmykali) by Dewalt
+- [PimpMyKali](https://github.com/TCM-Security/pimpmykali) by Dewalt and TCM Security
 - [Kali Linux](https://www.kali.org) by OffSec
 - [VirtualBox](https://www.virtualbox.org) by Oracle
 - [7-Zip](https://www.7-zip.org) by Igor Pavlov

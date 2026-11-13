@@ -33,12 +33,12 @@ export const SEVENZR: Pin = {
   pinnedAt: "2026-11-12",
 };
 
-/** PimpMyKali (Dewalt-arch/pimpmykali) pinned to one commit; `build` is the commit SHA. */
+/** PimpMyKali (TCM-Security/pimpmykali, the maintained repo) pinned to one commit; `build` is the commit SHA. */
 export const PIMPMYKALI: Pin = {
-  version: "2.0.5",
-  build: "c09fe98d5801bfb1fe0e2a06a3c07091fe4230e7",
+  version: "2.0.6",
+  build: "3b6e37a22a457c7a94bb82d81d3b8f2624c0addd",
   file: "pimpmykali.sh",
-  url: "https://raw.githubusercontent.com/Dewalt-arch/pimpmykali/c09fe98d5801bfb1fe0e2a06a3c07091fe4230e7/pimpmykali.sh",
-  sha256: "43167b25cf10c1d932c946a402d0240e91020b462ac7068ccfe87371a6507ec4",
-  pinnedAt: "2026-11-12",
+  url: "https://raw.githubusercontent.com/TCM-Security/pimpmykali/3b6e37a22a457c7a94bb82d81d3b8f2624c0addd/pimpmykali.sh",
+  sha256: "8dcb89f10807881150ae491c49c17de849307963d4f5c5cfcc1efd247e505846",
+  pinnedAt: "2026-11-13",
 };

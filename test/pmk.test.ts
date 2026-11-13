@@ -82,7 +82,7 @@ describe("PimpMyKali step", () => {
   });
   test("ISC-26 pinned commit and SHA-256, checked inside Kali before running", async () => {
     expect(PIMPMYKALI.build).toMatch(/^[0-9a-f]{40}$/);
-    expect(PIMPMYKALI.url).toBe(`https://raw.githubusercontent.com/Dewalt-arch/pimpmykali/${PIMPMYKALI.build}/pimpmykali.sh`);
+    expect(PIMPMYKALI.url).toBe(`https://raw.githubusercontent.com/TCM-Security/pimpmykali/${PIMPMYKALI.build}/pimpmykali.sh`);
     expect(PIMPMYKALI.sha256).toMatch(/^[0-9a-f]{64}$/);
     const { sys, calls } = fakeSys();
     await run(sys);
