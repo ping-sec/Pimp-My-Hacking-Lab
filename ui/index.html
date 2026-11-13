@@ -1,0 +1,422 @@
+<title>PEH Lab Setup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one calm centered column, one screen at a time, a single obvious next action. */
+:root {
+  --bg: #f4f6fb; --surface: #ffffff; --ink: #18203a; --muted: #5a6382; --line: #dde2ef;
+  --accent: #2f5bd3; --accent-ink: #ffffff; --accent-soft: #e6ecfb;
+  --ok: #1d7a4a; --ok-soft: #e3f4ea; --warn: #9a5b00; --warn-soft: #fbf0dc; --bad: #b3261e; --bad-soft: #fbe6e4;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1424; --surface: #171e33; --ink: #e8ecf8; --muted: #9aa3c0; --line: #2a3352;
+  --accent: #7d9cff; --accent-ink: #0f1424; --accent-soft: #1f2a4d;
+  --ok: #5fd197; --ok-soft: #133426; --warn: #f2b35a; --warn-soft: #3a2a10; --bad: #ff8a80; --bad-soft: #3d1715; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1424; --surface: #171e33; --ink: #e8ecf8; --muted: #9aa3c0; --line: #2a3352;
+  --accent: #7d9cff; --accent-ink: #0f1424; --accent-soft: #1f2a4d;
+  --ok: #5fd197; --ok-soft: #133426; --warn: #f2b35a; --warn-soft: #3a2a10; --bad: #ff8a80; --bad-soft: #3d1715; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 17px/1.55 var(--font-body); margin: 0 }
+.wrap { max-width: 640px; margin: 0 auto; padding-block: 28px 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px }
+header.brand { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; letter-spacing: .04em; text-transform: uppercase }
+.mark { width: 26px; height: 26px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: var(--accent-ink); font: 800 14px var(--font-display) }
+h1 { font: 800 clamp(28px, 6vw, 40px)/1.1 var(--font-display); margin: 0; text-wrap: balance; letter-spacing: -.01em }
+h2 { font: 600 21px/1.25 var(--font-display); margin: 0; text-wrap: balance }
+p { margin: 0; max-width: 62ch }
+.lede { color: var(--muted); font-size: 18px }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: grid; gap: 14px; min-width: 0 }
+.btn { appearance: none; border: 0; border-radius: 12px; font: 700 18px var(--font-body); padding: 16px 22px; cursor: pointer; background: var(--accent); color: var(--accent-ink); text-decoration: none; display: inline-flex; justify-content: center; align-items: center; gap: 8px; min-height: 56px }
+.btn.big { font-size: 20px; padding: 20px 26px; width: 100% }
+.btn.quiet { background: transparent; color: var(--accent); border: 1.5px solid var(--line); font-size: 16px; min-height: 48px; padding: 12px 18px }
+.btn:focus-visible, summary:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px }
+.btn[disabled] { opacity: .45; cursor: not-allowed }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center }
+.muted { color: var(--muted) }
+.small { font-size: 14px }
+ul.plain { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px }
+.check { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line) }
+.check:first-child { border-top: 0; padding-top: 0 }
+.check .advice { grid-column: 2 / 4; color: var(--muted); font-size: 15px }
+.pill { font: 700 13px var(--font-body); padding: 4px 10px; border-radius: 999px; white-space: nowrap }
+.pill.pass { background: var(--ok-soft); color: var(--ok) } .pill.warn { background: var(--warn-soft); color: var(--warn) }
+.pill.fail { background: var(--bad-soft); color: var(--bad) } .pill.unknown { background: var(--accent-soft); color: var(--accent) }
+.dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 15px; background: var(--accent-soft); color: var(--accent); flex: none }
+.dot.done { background: var(--ok-soft); color: var(--ok) } .dot.failed { background: var(--bad-soft); color: var(--bad) } .dot.needs-you { background: var(--warn-soft); color: var(--warn) }
+.dot.running { background: var(--accent); color: var(--accent-ink) }
+.step { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 12px; align-items: center }
+.step .sub { grid-column: 2 / 4; font-size: 14px; color: var(--muted) }
+.step.dim { opacity: .62 }
+.mins { font: 400 13px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap }
+.bar { height: 12px; border-radius: 999px; background: var(--accent-soft); overflow: hidden }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s ease }
+.big-num { font: 800 34px var(--font-display); font-variant-numeric: tabular-nums }
+.callout { border-radius: 12px; padding: 14px 16px; display: grid; gap: 6px }
+.callout.bad { background: var(--bad-soft) } .callout.warn { background: var(--warn-soft) } .callout.ok { background: var(--ok-soft) } .callout.info { background: var(--accent-soft) }
+details.adv > summary { cursor: pointer; color: var(--muted); font-size: 15px; list-style: none; padding: 6px 0 }
+details.adv > summary::-webkit-details-marker { display: none }
+details.adv > summary::before { content: "▸ "; } details.adv[open] > summary::before { content: "▾ "; }
+.opt { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: start; padding: 12px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer }
+.opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft) }
+.opt input { margin-top: 5px; width: 18px; height: 18px; accent-color: var(--accent) }
+.opt .d { grid-column: 2; font-size: 14px; color: var(--muted) }
+ol.howto { margin: 0; padding-left: 22px; display: grid; gap: 8px }
+code, kbd { font: 600 15px var(--font-mono); background: var(--accent-soft); color: var(--ink); padding: 1px 6px; border-radius: 6px }
+select { font: 16px var(--font-body); padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); max-width: 100% }
+pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; margin: 0; white-space: pre }
+.spinner { width: 18px; height: 18px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; flex: none }
+@keyframes spin { to { transform: rotate(360deg) } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none } .bar > i { transition: none } }
+.demo { border: 1.5px dashed var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; font-size: 14px; color: var(--muted) }
+.demo .row .btn { min-height: 36px; padding: 6px 12px; font-size: 14px }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 15px }
+</style>
+
+<div class="wrap" id="app" aria-live="polite">
+  <header class="brand"><span class="mark">P</span><span>PEH Lab Setup</span></header>
+
+  <!-- Welcome (ISC-1) -->
+  <section id="s-welcome" data-screen>
+    <div class="card" style="gap:18px">
+      <h1>Let's set up your hacking lab</h1>
+      <p class="lede">About 45 minutes from start to finish. Once it starts, you can walk away while it works.</p>
+      <button class="btn big" id="go" data-primary>Set up my lab</button>
+      <ul class="plain small muted">
+        <li>✓ Installs Kali Linux with every fix the course uses</li>
+        <li>✓ Adds the web-app practice labs</li>
+        <li>✓ Keeps the lab on a private network, away from your home Wi-Fi</li>
+      </ul>
+    </div>
+    <details class="adv" id="adv">
+      <summary>Advanced options</summary>
+      <div class="card" style="margin-top:10px">
+        <h2>Choose what to set up</h2>
+        <div id="profiles" class="plain" style="display:grid;gap:10px"></div>
+        <details class="adv"><summary>Pick individual parts</summary>
+          <div id="picks" style="display:grid;gap:8px;margin-top:8px"></div>
+        </details>
+        <button class="btn" id="go-adv">Set up with these choices</button>
+      </div>
+    </details>
+  </section>
+
+  <!-- PC check (ISC-2, ISC-3) -->
+  <section id="s-check" data-screen hidden>
+    <div class="card">
+      <h1>Checking your PC</h1>
+      <p class="lede">Making sure your computer can run the lab. This takes a few seconds.</p>
+      <div id="checks"></div>
+      <div id="bios" hidden class="callout bad">
+        <h2>Turn on virtualization</h2>
+        <p>Your PC has a setting called <strong>virtualization</strong> that's switched off. The lab can't run without it, and only you can turn it on. It takes about 5 minutes.</p>
+        <label for="brand" class="small"><strong>Who made your PC?</strong></label>
+        <select id="brand"></select>
+        <ol class="howto" id="bios-steps"></ol>
+        <p class="small">After your PC restarts, open PEH Lab Setup again. It remembers where you were.</p>
+        <p class="small"><a href="#" id="bios-override">I'm sure it's on, continue anyway</a></p>
+      </div>
+      <div class="row"><button class="btn" id="check-next" disabled>Start setup</button><button class="btn quiet" id="check-again" hidden>Check again</button></div>
+    </div>
+  </section>
+
+  <!-- Progress (ISC-4) -->
+  <section id="s-progress" data-screen hidden>
+    <div class="card">
+      <h1 id="p-title">Setting up your lab</h1>
+      <div class="row" style="justify-content:space-between"><span class="big-num" id="p-pct">0%</span><span class="muted" id="p-left">About 45 minutes left</span></div>
+      <div class="bar" role="progressbar" aria-label="Overall progress" aria-valuemin="0" aria-valuemax="100" id="p-bar"><i></i></div>
+      <ul class="plain" id="p-steps" style="gap:14px;margin-top:6px"></ul>
+      <p class="small muted">If your PC restarts, just open PEH Lab Setup again. It picks up where it left off.</p>
+    </div>
+  </section>
+
+  <!-- Guided labs download (ISC-6) -->
+  <section id="s-labs" data-screen hidden>
+    <div class="card">
+      <h1>One quick step needs you</h1>
+      <p class="lede">The web-app labs are part of your course, so you download them while logged in. We'll handle everything after that.</p>
+      <ol class="howto">
+        <li><a class="btn" id="labs-open" target="_blank" rel="noopener">Open the course page</a></li>
+        <li>Log in if it asks, then find <strong>Web Application Labs</strong> and click <strong>Download</strong>.</li>
+        <li>Come back here. We'll spot the file in your <strong>Downloads</strong> folder by ourselves.</li>
+      </ol>
+      <div class="callout info" id="labs-status"><div class="row"><span class="spinner"></span><span>Watching your Downloads folder for the lab file…</span></div></div>
+      <div class="row"><button class="btn" id="labs-next" disabled>Continue</button></div>
+    </div>
+  </section>
+
+  <!-- Error (ISC-7) -->
+  <section id="s-error" data-screen hidden>
+    <div class="card">
+      <h1>Setup paused</h1>
+      <div class="callout bad"><p id="e-what"><strong>Something went wrong.</strong></p></div>
+      <div class="callout info"><p id="e-todo">Press Try again.</p></div>
+      <div class="row"><button class="btn" id="e-retry">Try again</button><button class="btn quiet" id="e-copy">Copy help bundle</button></div>
+      <p class="small muted">Still stuck? Paste the help bundle into the course support channel. It includes what happened, but no passwords or personal details.</p>
+      <pre class="bundle" id="e-bundle" hidden></pre>
+    </div>
+  </section>
+
+  <!-- Ready (ISC-9) -->
+  <section id="s-ready" data-screen hidden>
+    <div class="card" style="gap:18px">
+      <div class="callout ok"><h1>Your lab is ready</h1><p>Everything passed its final check. Time to start hacking.</p></div>
+      <h2>Open Kali</h2>
+      <ol class="howto">
+        <li>Open <strong>VirtualBox</strong> from the Start menu.</li>
+        <li>Double-click <strong>Kali (PEH)</strong>.</li>
+        <li>Log in with username <code>kali</code> and password <code>kali</code>.</li>
+      </ol>
+      <h2>Your web-app labs</h2>
+      <p class="small muted">Open these in Firefox inside Kali:</p>
+      <ul class="plain" id="r-labs"></ul>
+      <h2>If anything breaks</h2>
+      <p>Open PEH Lab Setup and choose <strong>Reset my lab</strong>. It puts everything back to how it is right now.</p>
+    </div>
+  </section>
+
+  <!-- Demo controls: only when the page runs without the local installer -->
+  <div class="demo" id="demo" hidden>
+    <strong>Prototype preview.</strong> Nothing is installed; steps are simulated so you can review every screen.
+    <div class="row">
+      <label class="row" style="gap:6px"><input type="checkbox" id="d-virt"> Virtualization off</label>
+      <label class="row" style="gap:6px"><input type="checkbox" id="d-fail"> Make a step fail</label>
+    </div>
+    <div class="row"><button class="btn quiet" id="d-restart">Start over</button><button class="btn quiet" id="d-labs" hidden>Pretend the lab file downloaded</button></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }, del(k) { try { localStorage.removeItem(k); } catch {} } };
+
+  const STEPS = {
+    virtualbox: { title: "Install VirtualBox", detail: "The free program that runs your lab computers. Windows will ask for permission: click Yes.", minutes: 5 },
+    "kali-download": { title: "Download Kali Linux", detail: "Your hacking computer, about 3.5 GB.", minutes: 15 },
+    "kali-import": { title: "Set up your Kali computer", detail: "Creates the Kali virtual machine and its private lab network.", minutes: 5 },
+    pimpmykali: { title: "Apply Kali fixes", detail: "Runs PimpMyKali to install the tools the course uses.", minutes: 15 },
+    "labs-download": { title: "Get the web-app labs", detail: "You log in to the course and download one file. We do the rest.", minutes: 5, needsStudent: true },
+    "labs-start": { title: "Start the web-app labs", detail: "Starts the practice websites inside Kali.", minutes: 5 },
+    snapshot: { title: "Save a clean copy", detail: "So one click can reset your lab if anything breaks.", minutes: 1 },
+    "final-check": { title: "Final check", detail: "Makes sure everything works before you start.", minutes: 1 },
+  };
+  const PROFILES = {
+    full: { title: "Everything (recommended)", detail: "Kali with all the course fixes, plus the web-app labs.", steps: ["virtualbox", "kali-download", "kali-import", "pimpmykali", "labs-download", "labs-start", "snapshot", "final-check"] },
+    kali: { title: "Kali only", detail: "Kali with all the course fixes, no web-app labs.", steps: ["virtualbox", "kali-download", "kali-import", "pimpmykali", "snapshot", "final-check"] },
+    weblabs: { title: "Add web-app labs", detail: "For students who already set up Kali with this tool.", steps: ["labs-download", "labs-start", "snapshot", "final-check"] },
+  };
+  const ORDER = PROFILES.full.steps;
+  const BIOS = {
+    "": { label: "Choose your PC's brand", steps: [] },
+    dell: { label: "Dell", key: "F2" }, hp: { label: "HP", key: "F10" }, lenovo: { label: "Lenovo", key: "F1 (or F2 on laptops)" },
+    asus: { label: "ASUS", key: "F2 or Delete" }, acer: { label: "Acer", key: "F2" }, msi: { label: "MSI", key: "Delete" }, other: { label: "Something else / I built it", key: "Delete or F2" },
+  };
+  const WEB_LABS = [ ["Practice web app", "http://localhost:8080"], ["Login and session labs", "http://localhost:8081"], ["Database (SQL) labs", "http://localhost:8082"] ];
+
+  // ── Backend: the local installer when present, otherwise an in-page simulation ──
+  function simBackend() {
+    let s = store.get("peh-sim-state");
+    const save = () => store.set("peh-sim-state", s);
+    let timer = null;
+    const tick = () => {
+      if (!s || s.status !== "running") return;
+      const id = s.plan.find((x) => s.steps[x].state !== "done");
+      if (!id) { s.status = "done"; save(); return; }
+      const st = s.steps[id];
+      if (STEPS[id].needsStudent) { st.state = "needs-you"; save(); return; }
+      st.state = "running";
+      st.progress = Math.min(1, st.progress + 0.25 / Math.max(1, STEPS[id].minutes / 2));
+      if ($("#d-fail").checked && id === "kali-download" && st.progress >= 0.5) {
+        st.state = "failed"; s.status = "failed";
+        s.failure = { step: id, code: "SIM-kali-download", what: "Download Kali Linux stopped halfway because the download was interrupted.", todo: "Check that you're online, then press Try again. Your progress is kept." };
+      } else if (st.progress >= 1) { st.state = "done"; st.progress = 1; }
+      save();
+    };
+    const ensure = () => { if (!timer) timer = setInterval(tick, 350); };
+    if (s && s.status === "running") ensure();
+    return {
+      mode: "demo",
+      async check() {
+        await new Promise((r) => setTimeout(r, 900));
+        const off = $("#d-virt").checked;
+        return [
+          { id: "virtualization", label: "Virtualization", verdict: off ? "fail" : "pass", value: off ? "Turned off" : "Turned on", advice: off ? "Your PC needs one setting turned on before the lab can run. We'll show you how." : "Ready." },
+          { id: "ram", label: "Memory (RAM)", verdict: "pass", value: "16 GB", advice: "Plenty for the full lab." },
+          { id: "disk", label: "Free disk space", verdict: "pass", value: "212 GB free", advice: "Plenty of room." },
+        ];
+      },
+      async start(profile, picks) { s = newRun(profile, picks); s.status = "running"; save(); ensure(); return s; },
+      async state() { return s; },
+      async retry() { if (s && s.status === "failed") { $("#d-fail").checked = false; for (const id of s.plan) if (s.steps[id].state === "failed") s.steps[id] = { state: "waiting", progress: s.steps[id].progress }; delete s.failure; s.status = "running"; save(); ensure(); } return s; },
+      async labs() { return { file: store.get("peh-sim-labs") ? { found: true, name: "peh-web-labs.zip", sizeMb: 412.6, verified: true } : { found: false }, pageUrl: "https://academy.tcm-sec.com/" }; },
+      async labsReady() { if (s && s.steps["labs-download"]) { s.steps["labs-download"] = { state: "done", progress: 1 }; save(); } return s; },
+      async bundle() { return ["PEH Lab Setup: help bundle", `Created: ${new Date().toISOString()}`, "System: Windows 11 (demo)", `Profile: ${s?.profile ?? "none"} | Status: ${s?.status ?? "not started"}`, ...(s ? s.plan.map((id) => `  ${STEPS[id].title}: ${s.steps[id].state}`) : []), ...(s?.failure ? [`Error ${s.failure.code} at ${s.failure.step}: ${s.failure.what}`] : [])].join("\n"); },
+      heartbeat() {},
+      reset() { s = null; store.del("peh-sim-state"); store.del("peh-sim-labs"); },
+    };
+  }
+  function newRun(profile, picks) {
+    let plan = PROFILES[profile]?.steps ?? PROFILES.full.steps;
+    if (picks && picks.length) { const set = new Set([...picks, "final-check"]); plan = ORDER.filter((x) => set.has(x)); }
+    return { profile, plan, steps: Object.fromEntries(plan.map((id) => [id, { state: "waiting", progress: 0 }])), status: "running" };
+  }
+  function localBackend() {
+    const H = { "content-type": "application/json", "x-peh-lab": "1" };
+    const get = (p) => fetch(p, { cache: "no-store" }).then((r) => r.json());
+    const post = (p, b) => fetch(p, { method: "POST", headers: H, body: JSON.stringify(b ?? {}) }).then((r) => r.json());
+    return {
+      mode: "local",
+      check: () => get("/api/check").then((d) => d.checks),
+      start: (profile, picks) => post("/api/start", { profile, picks }).then((d) => d.state),
+      state: () => get("/api/state").then((d) => d.state),
+      retry: () => post("/api/retry").then((d) => d.state),
+      labs: () => get("/api/labs"),
+      labsReady: () => post("/api/labs/ready").then((d) => d.state),
+      bundle: () => get("/api/help-bundle").then((d) => d.text),
+      heartbeat: () => post("/api/heartbeat").catch(() => {}),
+      reset() {},
+    };
+  }
+
+  let api, chosen = { profile: "full", picks: [] }, poll = null;
+
+  function show(name) {
+    document.querySelectorAll("[data-screen]").forEach((el) => { el.hidden = el.id !== `s-${name}`; });
+    $("#d-labs").hidden = name !== "labs" || api.mode !== "demo";
+    window.scrollTo({ top: 0 });
+  }
+  function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.append(t); setTimeout(() => t.remove(), 2200); }
+
+  // Welcome + advanced
+  function renderAdvanced() {
+    $("#profiles").innerHTML = Object.entries(PROFILES).map(([id, p]) => `<label class="opt"><input type="radio" name="profile" id="pf-${id}" value="${id}" ${id === "full" ? "checked" : ""}><strong>${p.title}</strong><span class="d">${p.detail}</span></label>`).join("");
+    $("#picks").innerHTML = ORDER.filter((id) => id !== "final-check").map((id) => `<label class="opt"><input type="checkbox" id="pk-${id}" value="${id}"><strong>${STEPS[id].title}</strong><span class="d">${STEPS[id].detail}</span></label>`).join("");
+  }
+  async function beginCheck() {
+    show("check");
+    $("#checks").innerHTML = `<div class="row"><span class="spinner"></span><span>Looking at your PC…</span></div>`;
+    $("#bios").hidden = true; $("#check-next").disabled = true; $("#check-again").hidden = true;
+    const checks = await api.check();
+    $("#checks").innerHTML = checks.map((c) => `<div class="check"><strong>${c.label}</strong><span class="muted small">${c.value}</span><span class="pill ${c.verdict}">${{ pass: "Good", warn: "OK", fail: "Needs fixing", unknown: "Not sure" }[c.verdict]}</span><span class="advice">${c.advice}</span></div>`).join("");
+    const blocked = checks.some((c) => c.verdict === "fail");
+    const virtOff = checks.find((c) => c.id === "virtualization")?.verdict === "fail";
+    $("#bios").hidden = !virtOff;
+    $("#check-next").disabled = blocked;
+    $("#check-again").hidden = !blocked;
+    $("#check-next").textContent = blocked ? "Start setup" : "Looks good. Start setup";
+  }
+  function renderBios() {
+    const b = BIOS[$("#brand").value];
+    $("#bios-steps").innerHTML = !b || !b.key ? "" : [
+      "Save anything you have open, then restart your PC.",
+      `As soon as the screen goes dark, tap <kbd>${b.key}</kbd> over and over until a settings screen appears.`,
+      "Look for <strong>Intel Virtualization Technology</strong> (Intel PCs) or <strong>SVM Mode</strong> (AMD PCs). It's often under <strong>Advanced</strong> or <strong>CPU Configuration</strong>.",
+      "Change it to <strong>Enabled</strong>.",
+      "Choose <strong>Save and Exit</strong> (often <kbd>F10</kbd>), and let your PC restart.",
+    ].map((t) => `<li>${t}</li>`).join("");
+  }
+
+  // Progress
+  function renderProgress(s) {
+    const total = s.plan.reduce((n, id) => n + STEPS[id].minutes, 0);
+    const done = s.plan.reduce((n, id) => n + STEPS[id].minutes * (s.steps[id].state === "done" ? 1 : s.steps[id].progress || 0), 0);
+    const pct = Math.round((done / total) * 100), left = Math.max(1, Math.round(total - done));
+    $("#p-pct").textContent = `${pct}%`;
+    $("#p-left").textContent = s.status === "done" ? "Done" : `About ${left} minute${left === 1 ? "" : "s"} left`;
+    $("#p-bar").firstElementChild.style.width = `${pct}%`;
+    $("#p-bar").setAttribute("aria-valuenow", String(pct));
+    $("#p-steps").innerHTML = s.plan.map((id, i) => {
+      const st = s.steps[id].state, mark = { done: "✓", failed: "!", "needs-you": "•", running: String(i + 1), waiting: String(i + 1) }[st];
+      const sub = st === "running" ? `${STEPS[id].detail} ${Math.round((s.steps[id].progress || 0) * 100)}%` : st === "needs-you" ? "Waiting for you" : STEPS[id].detail;
+      return `<li class="step ${st === "waiting" ? "dim" : ""}"><span class="dot ${st}">${mark}</span><strong>${STEPS[id].title}</strong><span class="mins">${STEPS[id].minutes} min</span><span class="sub">${sub}</span></li>`;
+    }).join("");
+  }
+  async function follow() {
+    clearInterval(poll);
+    const step = async () => {
+      const s = await api.state();
+      if (!s) return;
+      if (s.status === "failed") { clearInterval(poll); return showError(s); }
+      if (s.status === "done") { clearInterval(poll); renderProgress(s); return showReady(); }
+      const waiting = s.plan.find((id) => s.steps[id].state === "needs-you");
+      if (waiting === "labs-download") { clearInterval(poll); return showLabs(); }
+      show("progress"); renderProgress(s);
+    };
+    await step();
+    poll = setInterval(step, 700);
+  }
+
+  // Labs
+  async function showLabs() {
+    show("labs");
+    const info = await api.labs();
+    $("#labs-open").href = info.pageUrl;
+    $("#labs-next").disabled = true;
+    const check = async () => {
+      const { file } = await api.labs();
+      if (file.found && file.verified) {
+        $("#labs-status").className = "callout ok";
+        $("#labs-status").innerHTML = `<p><strong>Got it.</strong> Found <code>${file.name}</code> (${file.sizeMb} MB) and checked that it's the right file.</p>`;
+        $("#labs-next").disabled = false; clearInterval(poll);
+      } else if (file.found && file.error) {
+        $("#labs-status").className = "callout bad";
+        $("#labs-status").innerHTML = `<p><strong>${file.error.what}</strong></p><p>${file.error.todo}</p>`;
+      }
+    };
+    clearInterval(poll); await check(); poll = setInterval(check, 1500);
+  }
+
+  // Error + ready
+  async function showError(s) {
+    show("error");
+    $("#e-what").innerHTML = `<strong>${s.failure?.what ?? "Something went wrong."}</strong>`;
+    $("#e-todo").textContent = s.failure?.todo ?? "Press Try again.";
+    $("#e-bundle").hidden = true;
+  }
+  function showReady() {
+    show("ready");
+    $("#r-labs").innerHTML = WEB_LABS.map(([n, u]) => `<li class="row" style="justify-content:space-between"><span>${n}</span><code>${u}</code></li>`).join("");
+  }
+
+  async function boot() {
+    api = await fetch("/api/health", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => (d && d.mode === "local" ? localBackend() : simBackend())).catch(() => simBackend());
+    $("#demo").hidden = api.mode !== "demo";
+    // Tell the installer this page is still open, on every screen (ISC-35).
+    setInterval(() => api.heartbeat(), 15000);
+    renderAdvanced();
+    $("#brand").innerHTML = Object.entries(BIOS).map(([k, b]) => `<option value="${k}">${b.label}</option>`).join("");
+    $("#brand").addEventListener("change", renderBios);
+
+    $("#go").addEventListener("click", () => { chosen = { profile: "full", picks: [] }; beginCheck(); });
+    $("#go-adv").addEventListener("click", () => {
+      const profile = document.querySelector('input[name="profile"]:checked')?.value ?? "full";
+      const picks = [...document.querySelectorAll("#picks input:checked")].map((i) => i.value);
+      chosen = { profile, picks }; beginCheck();
+    });
+    $("#check-again").addEventListener("click", beginCheck);
+    $("#bios-override").addEventListener("click", (e) => { e.preventDefault(); $("#check-next").disabled = false; $("#check-next").textContent = "Start setup anyway"; $("#check-next").focus(); });
+    $("#check-next").addEventListener("click", async () => { await api.start(chosen.profile, chosen.picks); follow(); });
+    $("#labs-next").addEventListener("click", async () => { await api.labsReady(); follow(); });
+    $("#e-retry").addEventListener("click", async () => { await api.retry(); follow(); });
+    $("#e-copy").addEventListener("click", async () => {
+      const text = await api.bundle();
+      $("#e-bundle").textContent = text; $("#e-bundle").hidden = false;
+      try { await navigator.clipboard.writeText(text); toast("Help bundle copied"); }
+      catch { const r = document.createRange(); r.selectNodeContents($("#e-bundle")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); toast("Selected. Press Ctrl+C to copy."); }
+    });
+    $("#d-restart").addEventListener("click", () => { clearInterval(poll); api.reset(); show("welcome"); });
+    $("#d-labs").addEventListener("click", () => { store.set("peh-sim-labs", true); });
+
+    // Resume a run in progress (after a reboot or reopening the window)
+    const s = await api.state();
+    if (s && s.status && s.status !== "idle") follow(); else show("welcome");
+  }
+  boot();
+})();
+</script>

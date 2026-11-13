@@ -1,0 +1,28 @@
+import { describe, expect, test } from "bun:test";
+const html = await Bun.file(new URL("../ui/index.html", import.meta.url)).text();
+
+describe("UI", () => {
+  test("ISC-1 welcome has exactly one primary action and Advanced starts collapsed", () => {
+    expect(html.match(/data-primary/g)?.length).toBe(1);
+    expect(html).toContain(">Set up my lab</button>");
+    expect(html).toMatch(/<details class="adv" id="adv">/);
+    expect(html).not.toMatch(/<details class="adv" id="adv" open/);
+  });
+  test("ISC-3 virtualization off shows a brand-specific BIOS guide", () => {
+    expect(html).toContain('id="bios"');
+    for (const key of ["dell", "hp", "lenovo", "asus", "acer", "msi"]) expect(html).toMatch(new RegExp(`${key}: \\{ label: "[^"]+", key: "`));
+    expect(html).toContain("Intel Virtualization Technology");
+    expect(html).toContain("SVM Mode");
+  });
+  test("ISC-7 errors show what happened, what to do, and Copy help bundle", () => {
+    expect(html).toContain('id="e-what"');
+    expect(html).toContain('id="e-todo"');
+    expect(html).toContain(">Copy help bundle</button>");
+  });
+  test("ISC-9 ready page covers opening Kali, the login, and web-lab links", () => {
+    expect(html).toContain("Your lab is ready");
+    expect(html).toContain("<code>kali</code>");
+    expect(html).toContain('id="r-labs"');
+    expect(html).toMatch(/WEB_LABS = \[ \["/);
+  });
+});

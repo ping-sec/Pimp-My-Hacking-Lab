@@ -1,0 +1,45 @@
+name: Test report
+description: Tell us how a run went, whether it worked or broke.
+labels: ["test-report"]
+body:
+  - type: dropdown
+    id: result
+    attributes:
+      label: How did it go?
+      options:
+        - "It worked: my lab is ready"
+        - "It failed partway"
+        - "It wouldn't start"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 23H2 (Settings > System > About)"
+    validations:
+      required: true
+  - type: input
+    id: pc
+    attributes:
+      label: PC brand/model and RAM
+      placeholder: "Dell XPS 15, 16 GB"
+  - type: dropdown
+    id: hypervisor
+    attributes:
+      label: Do you already use WSL2, Docker Desktop, Hyper-V or VMware?
+      options:
+        - "No"
+        - "Yes"
+        - "Not sure"
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Help bundle
+      description: If a step failed, click "Copy help bundle" and paste it here.
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: What confused you, how long it took, screenshots.
