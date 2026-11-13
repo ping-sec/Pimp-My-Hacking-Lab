@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { homedir, hostname, platform, release, totalmem, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import uiHtml from "../ui/index.html" with { type: "text" };
-import { PROFILES, STEP_INFO, planFor, simulatedStep, type ProfileId, type Step, type StepFailure, type StepId } from "./steps";
+import { PROFILES, STEP_INFO, planFor, simulatedStep, type ProfileId, type Step, type StepFailure, type StepId, type StepQuestion } from "./steps";
 import { KALI, PIMPMYKALI, SEVENZR, VIRTUALBOX } from "./pins";
 import { pimpmykaliStep } from "./pimpmykali";
 import { IDLE_EXIT_MS, clearInstance, existingInstance, shouldExit, writeInstance } from "./lifecycle";
@@ -23,6 +23,10 @@ export interface RunState {
   steps: Record<string, { state: StepState; progress: number }>;
   status: "idle" | "running" | "failed" | "done";
   failure?: StepFailure & { step: StepId };
+  /** A step waiting for the student's yes (ISC-49). */
+  question?: StepQuestion & { step: StepId };
+  /** Steps the student said yes to; kept across restarts. */
+  confirmed?: StepId[];
   startedAt?: string;
   updatedAt?: string;
 }
@@ -207,6 +211,18 @@ export class Runner {
     void this.loop();
     return s;
   }
+  /** The student said yes to the waiting question; run that step again with `confirmed` (ISC-49). */
+  confirm(): RunState | null {
+    const s = this.state;
+    if (!s?.question) return s;
+    const id = s.question.step;
+    s.confirmed = [...new Set([...(s.confirmed ?? []), id])];
+    delete s.question;
+    s.steps[id] = { state: "waiting", progress: 0 };
+    saveState(this.cfg, s);
+    void this.loop();
+    return s;
+  }
   /** The student finished the guided download; continue the run. */
   labsReady(): void {
     const s = this.state;
@@ -227,14 +243,22 @@ export class Runner {
         saveState(this.cfg, s);
         return; // waits for labsReady()
       }
+      if (s.question?.step === id) delete s.question; // asked before a restart; the step asks again if it still needs to
       s.steps[id] = { state: "running", progress: 0 };
       saveState(this.cfg, s);
       try {
         let last = 0;
-        await this.makeStep(id).run({ signal: this.abort.signal, progress: (f) => { s.steps[id].progress = f; if (f - last >= 0.1 || f === 1) { last = f; saveState(this.cfg, s); } } });
+        await this.makeStep(id).run({ signal: this.abort.signal, confirmed: s.confirmed?.includes(id) ?? false, progress: (f) => { s.steps[id].progress = f; if (f - last >= 0.1 || f === 1) { last = f; saveState(this.cfg, s); } } });
         s.steps[id] = { state: "done", progress: 1 };
         saveState(this.cfg, s);
       } catch (e) {
+        const q = (e as { question?: StepQuestion }).question;
+        if (q) {
+          s.steps[id] = { state: "needs-you", progress: 0 };
+          s.question = { ...q, step: id };
+          saveState(this.cfg, s);
+          return; // waits for confirm()
+        }
         const f = (e as { failure?: StepFailure }).failure ?? { code: `ERR-${id}`, what: `${STEP_INFO[id].title} didn't finish.`, todo: "Press Try again. If it fails twice, copy the help bundle and post it in the support channel." };
         s.steps[id] = { state: "failed", progress: s.steps[id].progress };
         s.status = "failed";
@@ -273,6 +297,7 @@ export function createApp(cfg: Config) {
       case "GET /api/check": return json({ checks: (lastChecks = await pcCheck(cfg)) });
       case "GET /api/state": return json({ state: runner.state });
       case "POST /api/start": { const b = await req.json().catch(() => ({})) as { profile?: ProfileId; picks?: StepId[] }; return json({ state: runner.start(b.profile && b.profile in PROFILES ? b.profile : "full", b.picks) }); }
+      case "POST /api/confirm": return json({ state: runner.confirm() });
       case "POST /api/retry": return json({ state: runner.retry() });
       case "GET /api/labs": return json({ file: findLabsFile(cfg), pageUrl: cfg.labsPageUrl });
       case "POST /api/labs/ready": { const f = findLabsFile(cfg); if (f.found && f.verified) runner.labsReady(); return json({ file: f, state: runner.state }); }

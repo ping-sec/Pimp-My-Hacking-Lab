@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { downloadResumable, sha256File } from "./download";
 import type { Pin } from "./pins";
-import { STEP_INFO, type Step, type StepFailure } from "./steps";
+import { STEP_INFO, type Step, type StepFailure, type StepQuestion } from "./steps";
 
 export interface Sys {
   platform: string;
@@ -58,6 +58,27 @@ async function installedVersion(sys: Sys): Promise<number[] | null> {
   return r.code === 0 ? parseVersion(r.stdout) : null;
 }
 
+const ask = (q: StepQuestion): never => { throw Object.assign(new Error(q.what), { question: q }); };
+
+/** Names of the VMs running right now ("Name" {uuid} per line). */
+async function runningVms(sys: Sys, exe: string): Promise<string[]> {
+  const r = await sys.exec([exe, "list", "runningvms"]);
+  return r.code === 0 ? [...r.stdout.matchAll(/^"(.+)" \{[0-9a-f-]+\}\s*$/gim)].map((m) => m[1]!) : [];
+}
+
+/**
+ * An older VirtualBox is upgraded only after the student says yes, and never while a VM runs (ISC-46..48).
+ * Keeping the old version is not offered: the PimpMyKali step relies on 7.2 behaviour (ISC-43).
+ */
+async function confirmUpgrade(sys: Sys, have: number[], pin: Pin, confirmed: boolean): Promise<void> {
+  const exe = sys.vboxManagePath()!;
+  const from = have.join("."), running = await runningVms(sys, exe);
+  const pack = /Extension Packs:\s*[1-9]/.test((await sys.exec([exe, "list", "extpacks"])).stdout) ? " Your Extension Pack will need updating to match afterwards." : "";
+  const kept = `Your virtual machines are kept.${pack}`;
+  if (running.length) ask({ code: "VBOX-RUNNING", what: `You have VirtualBox ${from}, and setup needs to upgrade it to ${pin.version}, but these virtual machines are running: ${running.join(", ")}.`, todo: `Shut them down in VirtualBox first (save your work inside them), then press the button. ${kept}`, confirm: "They're shut down, upgrade VirtualBox" });
+  if (!confirmed) ask({ code: "VBOX-UPGRADE", what: `You have VirtualBox ${from}. Setup needs ${pin.version} or newer, so it will upgrade it.`, todo: kept, confirm: "Upgrade VirtualBox" });
+}
+
 /** PowerShell single-quoted literal. */
 const psq = (s: string) => `'${s.replaceAll("'", "''")}'`;
 
@@ -72,11 +93,12 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
   return {
     id: "virtualbox",
     ...STEP_INFO.virtualbox,
-    async run({ progress, signal }) {
+    async run({ progress, signal, confirmed }) {
       if (sys.platform !== "win32") fail("VBOX-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
       const want = parseVersion(pin.version)!;
       const have = await installedVersion(sys);
       if (have && atLeast(have, want)) { progress(1); return; } // ISC-14
+      if (have) await confirmUpgrade(sys, have, pin, confirmed === true); // ISC-46..48
       progress(0.02);
 
       mkdirSync(sys.cacheDir, { recursive: true });

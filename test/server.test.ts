@@ -100,6 +100,50 @@ describe("server", () => {
     r.labsReady();
     await until(() => r.state!.status === "done");
   });
+  test("ISC-49 a step's question pauses the run as needs-you; confirm continues it, and the yes survives a restart", async () => {
+    const c = cfg();
+    const seen: boolean[] = [];
+    const asking = (id: Parameters<typeof simulatedStep>[0]): Step => id !== "virtualbox" ? simulatedStep(id, 1) : {
+      id, ...STEP_INFO.virtualbox,
+      async run({ progress, confirmed }) {
+        seen.push(confirmed === true);
+        if (!confirmed) throw Object.assign(new Error("q"), { question: { code: "VBOX-UPGRADE", what: "You have VirtualBox 7.0.14.", todo: "Your virtual machines are kept.", confirm: "Upgrade VirtualBox" } });
+        progress(1);
+      },
+    };
+    const r = new Runner(c, asking);
+    r.start("kali");
+    await until(() => r.state!.steps.virtualbox.state === "needs-you");
+    expect(r.state!.status).toBe("running");
+    expect(r.state!.question?.step).toBe("virtualbox");
+    expect(r.state!.question?.confirm).toBe("Upgrade VirtualBox");
+    // A restart before the answer asks again.
+    const again = new Runner(c, asking);
+    again.resume();
+    await until(() => seen.length === 2);
+    expect(seen).toEqual([false, false]);
+    // The yes, through the API.
+    const app = createApp(c);
+    (app.runner as unknown as { makeStep: typeof asking }).makeStep = asking;
+    const res = await app.handle(new Request("http://127.0.0.1/api/confirm", { method: "POST", headers: { "x-peh-lab": "1" } }));
+    expect(res.status).toBe(200);
+    await until(() => app.runner.state!.steps.virtualbox.state === "done");
+    expect(app.runner.state!.question).toBeUndefined();
+    expect(app.runner.state!.confirmed).toContain("virtualbox");
+    expect(seen.at(-1)).toBe(true);
+  });
+  test("ISC-49 a question left from before a restart is cleared once the step no longer asks", async () => {
+    const c = cfg();
+    const asks = (id: Parameters<typeof simulatedStep>[0]): Step => id !== "virtualbox" ? simulatedStep(id, 1) : { id, ...STEP_INFO.virtualbox, async run() { throw Object.assign(new Error("q"), { question: { code: "VBOX-UPGRADE", what: "w", todo: "t", confirm: "Upgrade VirtualBox" } }); } };
+    const r = new Runner(c, asks);
+    r.start("kali");
+    await until(() => r.state!.question !== undefined);
+    // Restart after the student upgraded VirtualBox by hand: the step now passes without asking.
+    const later = new Runner(c, (id) => simulatedStep(id, 1));
+    later.resume();
+    await until(() => later.state!.steps.virtualbox.state === "done");
+    expect(later.state!.question).toBeUndefined();
+  });
   test("API refuses POSTs without the installer header", async () => {
     const app = createApp(cfg());
     const res = await app.handle(new Request("http://127.0.0.1/api/start", { method: "POST", body: "{}" }));

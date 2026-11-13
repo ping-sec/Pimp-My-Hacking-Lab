@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VIRTUALBOX } from "../src/pins";
 import { virtualboxStep, type Sys } from "../src/virtualbox";
-import type { StepFailure } from "../src/steps";
+import type { StepFailure, StepQuestion } from "../src/steps";
 
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -15,7 +15,7 @@ const FAKE_SHA = createHash("sha256").update(FAKE_EXE).digest("hex");
 const pin = { ...VIRTUALBOX, sha256: FAKE_SHA };
 
 /** A fake Windows machine: records every command, answers VBoxManage from `installed`. */
-function fakeSys(o: { installed?: string | null; installerExit?: number; installerStderr?: string; afterInstall?: string | null; body?: Uint8Array } = {}) {
+function fakeSys(o: { installed?: string | null; installerExit?: number; installerStderr?: string; afterInstall?: string | null; body?: Uint8Array; running?: string[]; extpack?: boolean } = {}) {
   const cacheDir = mkdtempSync(join(tmpdir(), "vbox-")); dirs.push(cacheDir);
   const calls: string[][] = [];
   let installed = o.installed ?? null;
@@ -26,6 +26,8 @@ function fakeSys(o: { installed?: string | null; installerExit?: number; install
     vboxManagePath: () => (installed ? "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe" : null),
     async exec(argv) {
       calls.push(argv);
+      if (argv[0].endsWith("VBoxManage.exe") && argv[1] === "list" && argv[2] === "runningvms") return { code: 0, stdout: (o.running ?? []).map((n, i) => `"${n}" {0000000${i}-0000-0000-0000-000000000000}`).join("\n"), stderr: "" };
+      if (argv[0].endsWith("VBoxManage.exe") && argv[1] === "list" && argv[2] === "extpacks") return { code: 0, stdout: o.extpack ? "Extension Packs: 1\nPack no. 0:   Oracle VirtualBox Extension Pack\nVersion:      7.0.14\n" : "Extension Packs: 0\n", stderr: "" };
       if (argv[0].endsWith("VBoxManage.exe")) return installed ? { code: 0, stdout: `${installed}r175245\n`, stderr: "" } : { code: 1, stdout: "", stderr: "not found" };
       if (argv[0] === "powershell") {
         const code = o.installerExit ?? 0;
@@ -38,10 +40,10 @@ function fakeSys(o: { installed?: string | null; installerExit?: number; install
   };
   return { sys, calls };
 }
-async function run(sys: Sys) {
+async function run(sys: Sys, confirmed = false) {
   const fractions: number[] = [];
-  try { await virtualboxStep(sys, pin).run({ signal: new AbortController().signal, progress: (f) => fractions.push(f) }); return { ok: true as const, fractions }; }
-  catch (e) { return { ok: false as const, fractions, failure: (e as { failure?: StepFailure }).failure }; }
+  try { await virtualboxStep(sys, pin).run({ signal: new AbortController().signal, progress: (f) => fractions.push(f), confirmed }); return { ok: true as const, fractions }; }
+  catch (e) { return { ok: false as const, fractions, failure: (e as { failure?: StepFailure }).failure, question: (e as { question?: StepQuestion }).question }; }
 }
 
 describe("VirtualBox step", () => {
@@ -101,5 +103,36 @@ describe("VirtualBox step", () => {
     const { sys } = fakeSys(); sys.platform = "linux";
     const r = await run(sys);
     expect(r.failure!.code).toBe("VBOX-OS");
+  });
+  test("ISC-46 an older VirtualBox pauses for a yes before anything is downloaded or installed", async () => {
+    const { sys, calls } = fakeSys({ installed: "7.0.14" });
+    const r = await run(sys);
+    expect(r.ok).toBe(false);
+    expect(r.question?.code).toBe("VBOX-UPGRADE");
+    expect(r.question?.what).toContain("7.0.14");
+    expect(r.question?.what).toContain(pin.version);
+    expect(r.question?.todo).toMatch(/kept/);
+    expect(r.question?.confirm).toBe("Upgrade VirtualBox");
+    expect(calls.some((c) => c[0] === "powershell")).toBe(false);
+    expect(existsSync(join(sys.cacheDir, pin.file))).toBe(false);
+    const yes = await run(sys, true);
+    expect(yes.ok).toBe(true);
+  });
+  test("ISC-47 running VMs block the upgrade even after a yes, and are named", async () => {
+    const { sys, calls } = fakeSys({ installed: "7.1.4", running: ["Windows Server 2022", "Kioptrix"] });
+    for (const confirmed of [false, true]) {
+      const r = await run(sys, confirmed);
+      expect(r.question?.code).toBe("VBOX-RUNNING");
+      expect(r.question?.what).toContain("Windows Server 2022");
+      expect(r.question?.what).toContain("Kioptrix");
+      expect(r.question?.todo).toMatch(/shut/i);
+    }
+    expect(calls.some((c) => c[0] === "powershell")).toBe(false);
+  });
+  test("ISC-48 an installed Extension Pack is called out", async () => {
+    const withPack = await run(fakeSys({ installed: "7.0.14", extpack: true }).sys);
+    expect(withPack.question?.todo).toMatch(/Extension Pack/);
+    const without = await run(fakeSys({ installed: "7.0.14" }).sys);
+    expect(without.question?.todo).not.toMatch(/Extension Pack/);
   });
 });

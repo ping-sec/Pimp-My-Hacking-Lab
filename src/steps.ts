@@ -21,6 +21,19 @@ export interface StepContext {
   progress(fraction: number): void;
   /** Aborts a long step when the run is stopped. */
   signal: AbortSignal;
+  /** The student already said yes to this step's question (ISC-49). */
+  confirmed?: boolean;
+}
+
+/** A step that must not go on without the student's yes throws `{ question }` (ISC-46). */
+export interface StepQuestion {
+  code: string;
+  /** One sentence: what we found. */
+  what: string;
+  /** What happens next, and what to do first. */
+  todo: string;
+  /** The button that says yes; pressing it re-runs the step with `confirmed`, which checks again. */
+  confirm: string;
 }
 
 export interface StepFailure {

@@ -72,6 +72,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
 .spinner { width: 18px; height: 18px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; flex: none }
 @keyframes spin { to { transform: rotate(360deg) } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none } .bar > i { transition: none } }
+[hidden] { display: none !important }
 .demo { border: 1.5px dashed var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; font-size: 14px; color: var(--muted) }
 .demo .row .btn { min-height: 36px; padding: 6px 12px; font-size: 14px }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 15px }
@@ -159,6 +160,17 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       <div class="row"><button class="btn" id="e-retry">Try again</button><button class="btn quiet" id="e-copy">Copy help bundle</button></div>
       <p class="small muted">Still stuck? Paste the help bundle into the course support channel. It includes what happened, but no passwords or personal details.</p>
       <pre class="bundle" id="e-bundle" hidden></pre>
+    </div>
+  </section>
+
+  <!-- A step waiting for the student's yes (ISC-50) -->
+  <section id="s-ask" data-screen hidden>
+    <div class="card">
+      <h1>Before we continue</h1>
+      <div class="callout warn"><p id="q-what"></p></div>
+      <div class="callout info"><p id="q-todo"></p></div>
+      <div class="row"><button class="btn" id="q-yes">Upgrade VirtualBox</button></div>
+      <p class="small muted">Not ready yet? Close this page. Open PEH Lab Setup again whenever you are, and it picks up right here.</p>
     </div>
   </section>
 
@@ -255,6 +267,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       async state() { return s; },
       async retry() { if (s && s.status === "failed") { $("#d-fail").checked = false; for (const id of s.plan) if (s.steps[id].state === "failed") s.steps[id] = { state: "waiting", progress: s.steps[id].progress }; delete s.failure; s.status = "running"; save(); ensure(); } return s; },
       async labs() { return { file: store.get("peh-sim-labs") ? { found: true, name: "peh-web-labs.zip", sizeMb: 412.6, verified: true } : { found: false }, pageUrl: "https://academy.tcm-sec.com/" }; },
+      async confirm() { return s; },
       async labsReady() { if (s && s.steps["labs-download"]) { s.steps["labs-download"] = { state: "done", progress: 1 }; save(); } return s; },
       async bundle() { return ["PEH Lab Setup: help bundle", `Created: ${new Date().toISOString()}`, "System: Windows 11 (demo)", `Profile: ${s?.profile ?? "none"} | Status: ${s?.status ?? "not started"}`, ...(s ? s.plan.map((id) => `  ${STEPS[id].title}: ${s.steps[id].state}`) : []), ...(s?.failure ? [`Error ${s.failure.code} at ${s.failure.step}: ${s.failure.what}`] : [])].join("\n"); },
       heartbeat() {},
@@ -278,6 +291,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       retry: () => post("/api/retry").then((d) => d.state),
       labs: () => get("/api/labs"),
       labsReady: () => post("/api/labs/ready").then((d) => d.state),
+      confirm: () => post("/api/confirm").then((d) => d.state),
       bundle: () => get("/api/help-bundle").then((d) => d.text),
       heartbeat: () => post("/api/heartbeat").catch(() => {}),
       reset() {},
@@ -344,6 +358,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       if (!s) return;
       if (s.status === "failed") { clearInterval(poll); return showError(s); }
       if (s.status === "done") { clearInterval(poll); renderProgress(s); return showReady(); }
+      if (s.question) { clearInterval(poll); return showAsk(s.question); }
       const waiting = s.plan.find((id) => s.steps[id].state === "needs-you");
       if (waiting === "labs-download") { clearInterval(poll); return showLabs(); }
       show("progress"); renderProgress(s);
@@ -370,6 +385,15 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       }
     };
     clearInterval(poll); await check(); poll = setInterval(check, 1500);
+  }
+
+  // A question (ISC-50): text only, never HTML, since it can carry VM names the student chose.
+  function showAsk(q) {
+    show("ask");
+    $("#q-what").textContent = q.what;
+    $("#q-todo").textContent = q.todo;
+    $("#q-yes").textContent = q.confirm;
+    $("#q-yes").disabled = false;
   }
 
   // Error + ready
@@ -403,6 +427,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
     $("#bios-override").addEventListener("click", (e) => { e.preventDefault(); $("#check-next").disabled = false; $("#check-next").textContent = "Start setup anyway"; $("#check-next").focus(); });
     $("#check-next").addEventListener("click", async () => { await api.start(chosen.profile, chosen.picks); follow(); });
     $("#labs-next").addEventListener("click", async () => { await api.labsReady(); follow(); });
+    $("#q-yes").addEventListener("click", async () => { $("#q-yes").disabled = true; await api.confirm(); follow(); });
     $("#e-retry").addEventListener("click", async () => { await api.retry(); follow(); });
     $("#e-copy").addEventListener("click", async () => {
       const text = await api.bundle();

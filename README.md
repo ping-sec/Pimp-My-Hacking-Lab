@@ -31,7 +31,7 @@ Windows SmartScreen may warn about an unrecognized app because the exe isn't cod
 You need [Bun](https://bun.sh).
 
 ```sh
-bun test                 # 45 tests
+bun test                 # 52 tests
 bun run dev --simulate   # the UI with fake steps, on any OS
 bun run build:win        # dist/peh-lab-setup.exe
 ```

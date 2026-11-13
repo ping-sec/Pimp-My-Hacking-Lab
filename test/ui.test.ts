@@ -25,4 +25,15 @@ describe("UI", () => {
     expect(html).toContain('id="r-labs"');
     expect(html).toMatch(/WEB_LABS = \[ \["/);
   });
+  test("ISC-50 a step's question gets its own screen with one yes button", () => {
+    expect(html).toContain('id="s-ask"');
+    expect(html).toContain('id="q-what"');
+    expect(html).toContain('id="q-todo"');
+    expect(html).toMatch(/<button class="btn" id="q-yes">Upgrade VirtualBox<\/button>/);
+    expect(html).toContain('post("/api/confirm")');
+    expect(html).toMatch(/if \(s\.question\)/);
+  });
+  test("ISC-51 hidden always wins over a component's display, so the demo panel never shows in a real run", () => {
+    expect(html).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important\s*\}/);
+  });
 });
