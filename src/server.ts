@@ -3,7 +3,7 @@
  * State persists to disk so a reboot resumes the run (ISC-5).
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { homedir, hostname, platform, release, totalmem, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import uiHtml from "../ui/index.html" with { type: "text" };
@@ -141,10 +141,24 @@ export function findLabsFile(cfg: Config): LabsFile {
   return sha === cfg.labsSha256.toLowerCase() ? { ...base, verified: true } : { ...base, verified: false, error: { what: `"${n}" isn't the lab file this installer expects.`, todo: "Download the web-app labs file again from the course page, then press Check again." } };
 }
 
-// ── Help bundle (ISC-8) ───────────────────────────────────────────────────
-export function helpBundle(state: RunState | null, checks: Check[] | null): string {
+// ── Scrubbing (ISC-8, ISC-64) ─────────────────────────────────────────────
+/** Removes the home path, username and PC name from text the student may share. */
+export function scrub(text: string): string {
   const user = (() => { try { return userInfo().username; } catch { return ""; } })();
   const home = homedir();
+  const swap = (s: string, word: string, to: string) => (word ? s.split(word).join(to) : s);
+  text = swap(text, home, "~");
+  text = swap(text, home.replaceAll("\\", "/"), "~");
+  if (user.length >= 2) text = text.replace(new RegExp(user.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "<user>");
+  const host = hostname();
+  if (host.length >= 2) text = text.replace(new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "<pc>");
+  return text;
+}
+
+// ── Help bundle (ISC-8, ISC-67) ───────────────────────────────────────────
+export const BUNDLE_LOG_LINES = 30;
+export function helpBundle(state: RunState | null, checks: Check[] | null, log: string[] = []): string {
+  const tail = log.slice(-BUNDLE_LOG_LINES);
   const lines = [
     "PEH Lab Setup: help bundle",
     `Created: ${new Date().toISOString()}`,
@@ -154,15 +168,9 @@ export function helpBundle(state: RunState | null, checks: Check[] | null): stri
     ...(state?.failure ? [`Error ${state.failure.code} at ${state.failure.step}: ${state.failure.what}`] : []),
     ...(state?.failure?.detail ? [`Detail: ${state.failure.detail.replace(/\s+/g, " ").trim().slice(0, 600)}`] : []), // ISC-45
     ...(checks ? checks.map((c) => `  Check ${c.label}: ${c.verdict} (${c.value})`) : []),
+    ...(tail.length ? [`Log (newest ${tail.length} lines):`, ...tail.map((l) => `  ${l.slice(0, 300)}`)] : []),
   ];
-  let text = lines.join("\n");
-  const scrub = (s: string, word: string, to: string) => (word ? s.split(word).join(to) : s);
-  text = scrub(text, home, "~");
-  text = scrub(text, home.replaceAll("\\", "/"), "~");
-  if (user.length >= 2) text = text.replace(new RegExp(user.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "<user>");
-  const host = hostname();
-  if (host.length >= 2) text = text.replace(new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "<pc>");
-  return text;
+  return scrub(lines.join("\n"));
 }
 
 /** The real step for `id` when it is enabled on this machine, else null (simulated). */
@@ -176,18 +184,53 @@ function realStep(cfg: Config, id: StepId): Step | null {
   return null;
 }
 
+// ── Run log (ISC-63) ──────────────────────────────────────────────────────
+export interface LogLine { seq: number; t: string; text: string }
+export const LOG_KEEP = 500;
+const logPath = (cfg: Config) => join(cfg.stateDir, "run.log");
+function loadLog(cfg: Config): LogLine[] {
+  try {
+    return readFileSync(logPath(cfg), "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l) as LogLine]; } catch { return []; } }).slice(-LOG_KEEP);
+  } catch { return []; }
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────
 export class Runner {
   state: RunState | null;
   private abort: AbortController | null = null;
+  private lines: LogLine[];
+  /** Lines in run.log on disk; it is appended to, and rewritten to the newest LOG_KEEP when it grows past that. */
+  private onDisk: number;
   constructor(private cfg: Config, private makeStep: (id: StepId) => Step = (id) => realStep(cfg, id) ?? simulatedStep(id, cfg.msPerMinute, cfg.failAt)) {
     this.state = loadState(cfg);
+    this.lines = loadLog(cfg);
+    this.onDisk = this.lines.length;
+  }
+  /** Adds one line to the run log; multi-line text becomes several lines. */
+  log(text: string): void {
+    const t = new Date().toISOString();
+    const add = text.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim());
+    if (add.length === 0) return;
+    let seq = this.lines.at(-1)?.seq ?? 0;
+    const fresh = add.map((l) => ({ seq: ++seq, t, text: l }));
+    this.lines.push(...fresh);
+    if (this.lines.length > LOG_KEEP) this.lines.splice(0, this.lines.length - LOG_KEEP);
+    try {
+      mkdirSync(this.cfg.stateDir, { recursive: true });
+      if (this.onDisk + fresh.length > LOG_KEEP) { writeFileSync(logPath(this.cfg), this.lines.map((l) => JSON.stringify(l)).join("\n") + "\n"); this.onDisk = this.lines.length; }
+      else { appendFileSync(logPath(this.cfg), fresh.map((l) => JSON.stringify(l)).join("\n") + "\n"); this.onDisk += fresh.length; }
+    } catch { /* the log is a help, never a reason to stop the install */ }
+  }
+  /** Lines newer than `after`, and the sequence number to ask from next (ISC-64). */
+  logSince(after: number): { lines: LogLine[]; next: number } {
+    return { lines: this.lines.filter((l) => l.seq > after), next: this.lines.at(-1)?.seq ?? after };
   }
   start(profile: ProfileId, picks?: StepId[]): RunState {
     if (this.state?.status === "running") return this.state;
     this.state = newRun(profile, picks);
     this.state.startedAt = new Date().toISOString();
     saveState(this.cfg, this.state);
+    this.log(`Setup started: ${this.state.plan.map((id) => STEP_INFO[id].title).join(", ")}`);
     void this.loop();
     return this.state;
   }
@@ -197,6 +240,7 @@ export class Runner {
     if (!s || s.status !== "running") return false;
     for (const id of s.plan) if (s.steps[id].state === "running") s.steps[id] = { state: "waiting", progress: 0 };
     saveState(this.cfg, s);
+    this.log("Picked up where setup left off.");
     void this.loop();
     return true;
   }
@@ -209,6 +253,7 @@ export class Runner {
     s.status = "running";
     this.cfg.failAt = undefined;
     saveState(this.cfg, s);
+    this.log("Try again pressed.");
     void this.loop();
     return s;
   }
@@ -221,6 +266,7 @@ export class Runner {
     delete s.question;
     s.steps[id] = { state: "waiting", progress: 0 };
     saveState(this.cfg, s);
+    this.log(`You said yes: ${STEP_INFO[id].title}.`);
     void this.loop();
     return s;
   }
@@ -242,25 +288,32 @@ export class Runner {
       if (STEP_INFO[id].needsStudent) {
         s.steps[id] = { state: "needs-you", progress: 0 };
         saveState(this.cfg, s);
+        this.log(`Waiting for you: ${STEP_INFO[id].title}`);
         return; // waits for labsReady()
       }
       if (s.question?.step === id) delete s.question; // asked before a restart; the step asks again if it still needs to
       s.steps[id] = { state: "running", progress: 0 };
       saveState(this.cfg, s);
+      const title = STEP_INFO[id].title;
+      this.log(`Starting: ${title}`);
       try {
         let last = 0;
-        await this.makeStep(id).run({ signal: this.abort.signal, confirmed: s.confirmed?.includes(id) ?? false, progress: (f) => { s.steps[id].progress = f; if (f - last >= 0.1 || f === 1) { last = f; saveState(this.cfg, s); } } });
+        await this.makeStep(id).run({ signal: this.abort.signal, confirmed: s.confirmed?.includes(id) ?? false, log: (line) => this.log(line), progress: (f) => { s.steps[id].progress = f; if (f - last >= 0.1 || f === 1) { last = f; saveState(this.cfg, s); } } });
+        this.log(`Done: ${title}`);
         s.steps[id] = { state: "done", progress: 1 };
         saveState(this.cfg, s);
       } catch (e) {
         const q = (e as { question?: StepQuestion }).question;
         if (q) {
+          this.log(`Question for you: ${q.what}`);
           s.steps[id] = { state: "needs-you", progress: 0 };
           s.question = { ...q, step: id };
           saveState(this.cfg, s);
           return; // waits for confirm()
         }
         const f = (e as { failure?: StepFailure }).failure ?? { code: `ERR-${id}`, what: `${STEP_INFO[id].title} didn't finish.`, todo: "Press Try again. If it fails twice, copy the help bundle and post it in the support channel." };
+        this.log(`Failed: ${title} (${f.code}) ${f.what}`);
+        if (f.detail) this.log(f.detail.slice(-2000));
         s.steps[id] = { state: "failed", progress: s.steps[id].progress };
         s.status = "failed";
         s.failure = { ...f, step: id };
@@ -268,6 +321,7 @@ export class Runner {
         return;
       }
     }
+    this.log("All steps finished. Your lab is ready.");
     s.status = "done";
     saveState(this.cfg, s);
   }
@@ -302,7 +356,8 @@ export function createApp(cfg: Config) {
       case "POST /api/retry": return json({ state: runner.retry() });
       case "GET /api/labs": return json({ file: findLabsFile(cfg), pageUrl: cfg.labsPageUrl });
       case "POST /api/labs/ready": { const f = findLabsFile(cfg); if (f.found && f.verified) runner.labsReady(); return json({ file: f, state: runner.state }); }
-      case "GET /api/help-bundle": return json({ text: helpBundle(runner.state, lastChecks) });
+      case "GET /api/help-bundle": return json({ text: helpBundle(runner.state, lastChecks, runner.logSince(0).lines.map((l) => l.text)) });
+      case "GET /api/log": { const r = runner.logSince(Number(url.searchParams.get("after")) || 0); return json({ next: r.next, lines: r.lines.map((l) => ({ ...l, text: scrub(l.text) })) }); }
       default: return json({ error: "not found" }, 404);
     }
   }

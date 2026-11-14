@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PIMPMYKALI } from "../src/pins";
-import { gaPollScript, pimpmykaliStep, PMK_DONE, pollScript, runCommand } from "../src/pimpmykali";
+import { gaPollScript, newLogLines, pimpmykaliStep, PMK_DONE, pollScript, runCommand } from "../src/pimpmykali";
 import { KALI_VM_NAME } from "../src/kali";
 import type { Sys } from "../src/virtualbox";
 import type { StepFailure } from "../src/steps";
@@ -332,5 +332,24 @@ describe("settings after PimpMyKali", () => {
     const again = calls.slice(before);
     expect(again.some((c) => c[1] === "guestcontrol")).toBe(false); // PimpMyKali not run again
     expect(again.some((c) => c[1] === "modifyvm" && c.includes("--nic2"))).toBe(true);
+  });
+});
+
+describe("PimpMyKali log (F13)", () => {
+  test("ISC-66 newLogLines returns only new lines, strips colour codes and markers, drops a cut first line", () => {
+    expect(newLogLines([], "\x1b[1;32m  [+] Installing\x1b[0m\n\nline b\nPEH_RUNNING", false).lines).toEqual(["  [+] Installing", "line b"]);
+    const first = newLogLines([], "a\nb\nc\nPEH_RUNNING", false);
+    expect(newLogLines(first.seen, "b\nc\nd\ne\nPEH_RUNNING", false).lines).toEqual(["d", "e"]);
+    expect(newLogLines(first.seen, "a\nb\nc\nPEH_RUNNING", false).lines).toEqual([]);
+    expect(newLogLines([], "half a line\nwhole\nPEH_STOPPED", true).lines).toEqual(["whole"]);
+    expect(newLogLines([], "Get:1 10%\rGet:1 55%\rGet:1 100%\n", false).lines).toEqual(["Get:1 100%"]);
+  });
+  test("ISC-66 the step shows PimpMyKali's output once per line, through ctx.log", async () => {
+    const { sys } = fakeSys({ runPolls: 3 });
+    const log: string[] = [];
+    await pimpmykaliStep(sys, PIMPMYKALI).run({ signal: new AbortController().signal, progress: () => {}, log: (s) => log.push(s) });
+    expect(log.filter((l) => l === "Installing...").length).toBe(1);
+    expect(log).toContain("    All Done! Happy Hacking!");
+    expect(log.some((l) => l.includes("PEH_"))).toBe(false);
   });
 });

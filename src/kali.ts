@@ -16,12 +16,14 @@ export const KALI_VM_NAME = "Kali (PEH)";
 const fail = (code: string, what: string, todo: string, detail?: string): never => { throw Object.assign(new Error(what), { failure: { code, what, todo, ...(detail ? { detail } : {}) } satisfies StepFailure }); };
 
 /** Download `pin` into the cache unless a verified copy is already there. Progress spans [from, to]. */
-async function fetchVerified(sys: Sys, pin: Pin, codePrefix: string, label: string, progress: (f: number) => void, from: number, to: number, signal: AbortSignal): Promise<string> {
+async function fetchVerified(sys: Sys, pin: Pin, codePrefix: string, label: string, progress: (f: number) => void, from: number, to: number, signal: AbortSignal, say: (line: string) => void = () => {}): Promise<string> {
   mkdirSync(sys.cacheDir, { recursive: true });
   const dest = join(sys.cacheDir, pin.file);
-  if (existsSync(dest) && (await sha256File(dest)) === pin.sha256) { progress(to); return dest; }
+  if (existsSync(dest) && (await sha256File(dest)) === pin.sha256) { say(`${label}: already downloaded and checked.`); progress(to); return dest; }
   rmSync(dest, { force: true });
-  await downloadResumable(sys, pin.url, dest, { signal, code: `${codePrefix}-DL`, label, progress: (f) => progress(from + (to - from) * f) }); // ISC-38..40
+  say(`Downloading ${label}.`);
+  await downloadResumable(sys, pin.url, dest, { signal, log: say, code: `${codePrefix}-DL`, label, progress: (f) => progress(from + (to - from) * f) }); // ISC-38..40
+  say(`${label}: checking the download (SHA-256).`);
   if ((await sha256File(dest)) !== pin.sha256) {
     rmSync(dest, { force: true });
     fail(`${codePrefix}-SHA`, `The ${label} download was damaged on the way, so we threw it away.`, "Press Try again to download a fresh copy.");
@@ -50,11 +52,13 @@ export function kaliDownloadStep(sys: Sys, kali: Pin, sevenzr: Pin): Step {
   return {
     id: "kali-download",
     ...STEP_INFO["kali-download"],
-    async run({ progress, signal }) {
+    async run({ progress, signal, log }) {
+      const say = log ?? (() => {});
       if (sys.platform !== "win32") fail("KALI-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
-      if (existsSync(join(extractDir(sys), DONE_MARK)) && findVbox(sys)) { progress(1); return; } // ISC-21 reuse
-      const archive = await fetchVerified(sys, kali, "KALI", "Kali Linux", progress, 0, 0.85, signal);
-      const seven = await fetchVerified(sys, sevenzr, "KALI", "the 7-Zip extractor", progress, 0.85, 0.87, signal);
+      if (existsSync(join(extractDir(sys), DONE_MARK)) && findVbox(sys)) { say("Kali is already downloaded and unpacked."); progress(1); return; } // ISC-21 reuse
+      const archive = await fetchVerified(sys, kali, "KALI", "Kali Linux", progress, 0, 0.85, signal, say);
+      const seven = await fetchVerified(sys, sevenzr, "KALI", "the 7-Zip extractor", progress, 0.85, 0.87, signal, say);
+      say("Unpacking Kali (this can take a few minutes).");
       rmSync(extractDir(sys), { recursive: true, force: true });
       mkdirSync(extractDir(sys), { recursive: true });
       const r = await sys.exec([seven, "x", "-y", `-o${extractDir(sys)}`, archive]); // ISC-22
@@ -107,22 +111,26 @@ export function kaliImportStep(sys: Sys, kali: Pin): Step {
   return {
     id: "kali-import",
     ...STEP_INFO["kali-import"],
-    async run({ progress }) {
+    async run({ progress, log }) {
+      const say = log ?? (() => {});
       if (sys.platform !== "win32") fail("KALI-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
       const before = await vbox(sys, ["list", "vms"], "KALI-IMPORT", "VirtualBox didn't answer.");
       if (hasVm(before, KALI_VM_NAME)) {
         // ISC-44: never re-register; finish a half-done import unless Kali is running right now.
         const info = await vbox(sys, ["showvminfo", KALI_VM_NAME, "--machinereadable"], "KALI-IMPORT", "VirtualBox couldn't read Kali's settings.");
-        if (/^VMState="running"/m.test(info)) { progress(1); return; } // the PimpMyKali step applies them after its shutdown (ISC-54)
+        if (/^VMState="running"/m.test(info)) { say(`${KALI_VM_NAME} is running; its settings are applied after the Kali fixes.`); progress(1); return; } // the PimpMyKali step applies them after its shutdown (ISC-54)
+        say(`${KALI_VM_NAME} already exists; finishing its settings.`);
       } else {
         const file = findVbox(sys);
         if (!file) return fail("KALI-MISSING", "The Kali files are missing, so there's nothing to set up yet.", "Press Try again. Setup downloads Kali first.");
         const original = basename(file, ".vbox");
         progress(0.1);
+        say(`Adding Kali to VirtualBox as "${KALI_VM_NAME}".`);
         if (!hasVm(before, original)) await vbox(sys, ["registervm", file], "KALI-IMPORT", "Kali couldn't be added to VirtualBox.");
         await vbox(sys, ["modifyvm", original, "--name", KALI_VM_NAME], "KALI-IMPORT", "Kali couldn't be renamed in VirtualBox.");
       }
       progress(0.4);
+      say("Setting Kali's memory, CPUs and networks (NAT for internet, host-only for the lab).");
       await applyKaliSettings(sys); // ISC-23, ISC-24
       progress(0.9);
       const after = await vbox(sys, ["list", "vms"], "KALI-IMPORT", "VirtualBox didn't answer.");

@@ -186,3 +186,69 @@ describe("course page", () => {
     expect(html).not.toContain("academy.tcm-sec.com");
   });
 });
+
+describe("on-screen log (F13)", () => {
+  const failing = (lines = 1) => (id: string): Step => ({
+    id, ...STEP_INFO[id as keyof typeof STEP_INFO],
+    async run(ctx) {
+      for (let i = 0; i < lines; i++) ctx.log?.(`hello ${i} from ${id}`);
+      if (id === "pimpmykali") throw Object.assign(new Error("x"), { failure: { code: "PMK-X", what: "The Kali fixes broke.", todo: "t", detail: "the tool said no" } });
+    },
+  } as Step);
+
+  test("ISC-63 steps log through ctx.log; the runner logs start, finish and failure, and a restart keeps the log", async () => {
+    const c = cfg();
+    const r = new Runner(c, failing() as never);
+    r.start("full", ["virtualbox", "pimpmykali"]);
+    await until(() => r.state!.status !== "running");
+    const lines = r.logSince(0).lines;
+    const text = lines.map((l) => l.text).join("\n");
+    expect(text).toContain("Starting: Install VirtualBox");
+    expect(text).toContain("hello 0 from virtualbox");
+    expect(text).toContain("Done: Install VirtualBox");
+    expect(text).toContain("Failed: Apply Kali fixes (PMK-X) The Kali fixes broke.");
+    expect(text).toContain("the tool said no");
+    for (let i = 1; i < lines.length; i++) expect(lines[i].seq).toBeGreaterThan(lines[i - 1].seq);
+    expect(lines[0].t).toMatch(/^\d{4}-\d\d-\d\dT/);
+    const again = new Runner(c, failing() as never);
+    expect(again.logSince(0).lines.map((l) => l.text)).toEqual(lines.map((l) => l.text));
+  });
+  test("ISC-63 only the newest 500 lines are kept, in memory and on disk", async () => {
+    const c = cfg();
+    const r = new Runner(c, failing(700) as never);
+    r.start("full", ["virtualbox"]);
+    await until(() => r.state!.status !== "running");
+    const lines = r.logSince(0).lines;
+    expect(lines.length).toBe(500);
+    const texts = lines.map((l) => l.text);
+    expect(texts).toContain("hello 699 from final-check");
+    expect(texts).not.toContain("hello 0 from final-check");
+    expect((await Bun.file(join(c.stateDir, "run.log")).text()).trim().split("\n").length).toBeLessThanOrEqual(500);
+    expect(new Runner(c).logSince(0).lines.length).toBe(500);
+  });
+  test("ISC-64 /api/log returns only newer lines, scrubbed of home path and username", async () => {
+    const app = createApp(cfg());
+    const user = userInfo().username;
+    app.runner.log(`Saved to ${homedir()}/Downloads for ${user}`);
+    app.runner.log("second line");
+    const all = await (await app.handle(new Request("http://127.0.0.1/api/log?after=0"))).json() as { lines: { seq: number; text: string }[]; next: number };
+    expect(all.lines.length).toBe(2);
+    expect(all.lines[0].text).toBe("Saved to ~/Downloads for <user>");
+    expect(JSON.stringify(all)).not.toContain(homedir());
+    const newer = await (await app.handle(new Request(`http://127.0.0.1/api/log?after=${all.lines[0].seq}`))).json() as { lines: { text: string }[]; next: number };
+    expect(newer.lines.map((l) => l.text)).toEqual(["second line"]);
+    expect(newer.next).toBe(all.next);
+    const none = await (await app.handle(new Request(`http://127.0.0.1/api/log?after=${all.next}`))).json() as { lines: unknown[] };
+    expect(none.lines).toEqual([]);
+  });
+  test("ISC-67 the help bundle ends with the newest 30 log lines, scrubbed", () => {
+    const log = Array.from({ length: 40 }, (_, i) => `line ${i} in ${homedir()}`);
+    const text = helpBundle({ profile: "full", plan: ["virtualbox"], steps: { virtualbox: { state: "failed", progress: 0 } }, status: "failed" }, null, log);
+    expect(text).toContain("Log (newest 30 lines):");
+    expect(text).toContain("line 39 in ~");
+    expect(text).toContain("line 10 in ~");
+    expect(text).not.toContain("line 9 in");
+    expect(text).not.toContain(homedir());
+    expect(text.trim().endsWith("line 39 in ~")).toBe(true);
+  });
+});

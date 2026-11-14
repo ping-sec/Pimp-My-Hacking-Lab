@@ -98,3 +98,17 @@ describe("resumable downloads (F9)", () => {
     expect(s).toMatch(/--speed-limit \d+/);
   });
 });
+
+describe("download log (F13)", () => {
+  test("ISC-66 downloads log their size every 10% and each stall or resume", async () => {
+    const srv = server(["stall", "drop", "ok"]);
+    const dest = join(tmp(), "kali.7z");
+    const log: string[] = [];
+    await downloadResumable({ fetch, sleep: noSleep }, srv.url, dest, { signal: new AbortController().signal, progress: () => {}, log: (s) => log.push(s), stallMs: 300, label: "Kali Linux", code: "KALI-DL" });
+    srv.stop();
+    expect(log.some((l) => /^Kali Linux: 100% \(/.test(l))).toBe(true);
+    expect(log.filter((l) => /^Kali Linux: \d+% \(/.test(l)).length).toBeLessThanOrEqual(11);
+    expect(log.some((l) => /stalled/i.test(l))).toBe(true);
+    expect(log.some((l) => /resuming from/i.test(l))).toBe(true);
+  });
+});

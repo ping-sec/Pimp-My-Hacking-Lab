@@ -111,6 +111,24 @@ export function pollScript(o: Pick<RunPaths, "log" | "pid"> = KALI_PATHS, ga: Ga
   return `tail -c 3000 ${sh(o.log)} 2>/dev/null; p=$(cat ${sh(o.pid)} 2>/dev/null); if grep -q '^PEH_GA_DONE' ${sh(ga.log)} 2>/dev/null; then echo PEH_STOPPED; elif [ -n "$p" ] && [ -d "/proc/$p" ]; then echo PEH_RUNNING; else echo PEH_STOPPED; fi`;
 }
 
+/**
+ * The lines of a log poll the student hasn't seen yet (ISC-66). The poll returns the log's last 3000 bytes, so
+ * consecutive polls overlap: the new window starts with lines from the end of the last one. Colour codes and our
+ * own PEH_ markers are dropped, a \r-redrawn line keeps its final state, and a first line cut by `tail -c` is skipped.
+ */
+export function newLogLines(seen: string[], out: string, cut: boolean): { lines: string[]; seen: string[] } {
+  let cur = out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => (l.split("\r").filter((x) => x.trim()).at(-1) ?? "").trimEnd());
+  if (cut) cur = cur.slice(1);
+  cur = cur.filter((l) => l.trim() && !/^PEH_(RUNNING|STOPPED)$/.test(l.trim()));
+  let j = Math.min(seen.length, cur.length);
+  for (; j > 0; j--) {
+    let same = true;
+    for (let k = 0; k < j && same; k++) same = cur[k] === seen[seen.length - j + k];
+    if (same) break;
+  }
+  return { lines: cur.slice(j), seen: cur };
+}
+
 export function launchScript(pin: Pin): string {
   // Download the pinned script, check its SHA-256, then start it detached as root.
   return [
@@ -130,10 +148,11 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
   return {
     id: "pimpmykali",
     ...STEP_INFO.pimpmykali,
-    async run({ progress, signal }) {
+    async run({ progress, signal, log }) {
+      const say = log ?? (() => {});
       if (sys.platform !== "win32") fail("PMK-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
       const marker = join(sys.cacheDir, PMK_DONE);
-      if (existsSync(marker)) { progress(1); return; } // ISC-30 re-runs skip
+      if (existsSync(marker)) { say("The Kali fixes already ran; skipping."); progress(1); return; } // ISC-30 re-runs skip
 
       const list = await vm(sys, ["list", "vms"]);
       if (!list.stdout.includes(`"${KALI_VM_NAME}"`)) fail("PMK-NOVM", "Kali isn't set up yet, so it can't be fixed up.", "Press Try again. Setup creates Kali first.");
@@ -144,15 +163,18 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
         // ISC-27: boot with no window, wait for the guest tools to answer.
         const before = await vmState(sys);
         if (before !== "running") {
+          say("Starting Kali in the background (no window).");
           let r = await vm(sys, ["startvm", KALI_VM_NAME, "--type", "headless"]);
           // ISC-56: a state saved under a different VirtualBox engine (Hyper-V vs VT-x) can't be restored;
           // the install has nothing worth keeping in RAM, so discard it once and boot fresh.
           if (r.code !== 0 && before.includes("saved")) {
+            say("Kali's saved state wouldn't restore; discarding it and starting fresh.");
             await vm(sys, ["discardstate", KALI_VM_NAME]);
             r = await vm(sys, ["startvm", KALI_VM_NAME, "--type", "headless"]);
           }
           if (r.code !== 0) fail("PMK-START", "Kali couldn't be started.", "Restart your PC, open PEH Lab Setup, and press Try again.", errText(r)); // ISC-55
         }
+        say("Waiting for Kali to finish booting.");
         const bootPolls = Math.max(1, Math.ceil(bootTimeout / 5000));
         let ready = false, lastErr = "";
         for (let i = 0; i < bootPolls && !ready; i++) {
@@ -166,6 +188,7 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
         }
         if (!ready) fail("PMK-BOOT", "Kali started but didn't finish booting in time.", "Restart your PC, open PEH Lab Setup, and press Try again.", lastErr);
         progress(0.1);
+        say("Kali is up. Downloading PimpMyKali inside Kali and checking its SHA-256.");
 
         // ISC-26, ISC-28: pinned, checked, detached, as root.
         const launch = await guest(sys, launchScript(pin));
@@ -174,22 +197,30 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
           fail(damaged ? "PMK-SHA" : "PMK-DL", damaged ? "The Kali fixes download was damaged, so it didn't run." : "Kali couldn't download the course fixes.", "Check that you're online, then press Try again.", errText(launch));
         }
 
+        say("PimpMyKali is running. Its own output follows.");
         // ISC-28, ISC-29: watch the log; ride out guest-tools dropouts.
         const maxPolls = Math.ceil(runTimeout / pollMs);
-        let tail = "", drops = 0, lastErr2 = "";
+        let tail = "", drops = 0, lastErr2 = "", seenLines: string[] = [], down = false;
         for (let i = 0; ; i++) {
           if (signal.aborted) throw new Error("stopped");
           if (i >= maxPolls) fail("PMK-TIMEOUT", "The Kali fixes took much longer than expected.", "Press Try again. It picks up where it left off.");
           await sleep(pollMs);
           const r = await guest(sys, POLL);
           // ISC-60: guest control can stay down until the in-job cleanup restores Kali's guest tools; ride out 40 minutes.
-          if (r.code !== 0) { lastErr2 = errText(r); if (++drops > (40 * 60_000) / pollMs) fail("PMK-LOST", "We lost touch with Kali while it was being fixed up.", "Restart your PC, open PEH Lab Setup, and press Try again.", lastErr2); continue; }
+          if (r.code !== 0) { if (!down) say("Lost touch with Kali for a moment (expected while its guest tools reinstall); still waiting."); down = true; lastErr2 = errText(r); if (++drops > (40 * 60_000) / pollMs) fail("PMK-LOST", "We lost touch with Kali while it was being fixed up.", "Restart your PC, open PEH Lab Setup, and press Try again.", lastErr2); continue; }
           tail = r.stdout;
+          if (down) say("Back in touch with Kali.");
+          down = false;
+          const logPart = tail.replace(/PEH_(RUNNING|STOPPED)\s*$/, "");
+          const fresh = newLogLines(seenLines, logPart, logPart.length >= 2990); // ISC-66
+          seenLines = fresh.seen;
+          for (const l of fresh.lines) say(l);
           progress(Math.min(0.85, 0.1 + 0.75 * (i + 1) / Math.max(1, (15 * 60_000) / pollMs)));
           if (tail.includes("PEH_STOPPED")) break;
         }
         if (!tail.includes(SUCCESS)) fail("PMK-FAIL", "The Kali fixes stopped before finishing.", "Press Try again. If it fails twice, copy the help bundle and post it in the support channel.", tail.replace(/PEH_STOPPED\s*$/, "").trim().slice(-600));
         progress(0.88);
+        say("PimpMyKali finished. Checking the guest-tools cleanup inside Kali.");
 
         // ISC-60: the PimpMyKali job has already tidied the guest tools; read its result before the shutdown.
         const gaFail = (detail: string): never => fail("PMK-GA", "Kali's guest tools couldn't be tidied up after the fixes.", "Check that you're online, then press Try again.", detail);
@@ -202,6 +233,7 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
         }
         if (!gaOut) gaFail(gaErr || "The guest tools cleanup left no result.");
         if (!/PEH_GA_DONE rc=0 left=0/.test(gaOut)) gaFail(gaOut.trim().slice(-600));
+        say("Guest tools tidied up.");
         progress(0.9);
         mkdirSync(sys.cacheDir, { recursive: true });
         writeFileSync(ran, `${pin.build}\n`);
@@ -209,11 +241,13 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
 
       // ISC-30: clean shutdown (PimpMyKali asks for a reboot), hard power-off as a fallback. A Try again may find it off already.
       if ((await vmState(sys)) === "running") {
+        say("Shutting Kali down cleanly.");
         await vm(sys, ["controlvm", KALI_VM_NAME, "acpipowerbutton"]);
         let off = false;
         for (let i = 0; i < 36 && !off; i++) { await sleep(5000); off = (await vmState(sys)) === "poweroff"; }
-        if (!off) await vm(sys, ["controlvm", KALI_VM_NAME, "poweroff"]);
+        if (!off) { say("Kali didn't shut down in 3 minutes; powering it off."); await vm(sys, ["controlvm", KALI_VM_NAME, "poweroff"]); }
       }
+      say("Applying Kali's memory, CPUs and network settings.");
       // ISC-54: Kali may have been running at import, which leaves its settings to now. VirtualBox can hold the
       // machine lock for a few seconds after power-off, so a refused change is tried again. A network failure is
       // never retried: creating the adapter asks Windows for permission each time (ISC-62).

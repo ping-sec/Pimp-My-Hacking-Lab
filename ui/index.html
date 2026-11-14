@@ -68,6 +68,10 @@ details.adv > summary::before { content: "▸ "; } details.adv[open] > summary::
 ol.howto { margin: 0; padding-left: 22px; display: grid; gap: 8px }
 code, kbd { font: 600 15px var(--font-mono); background: var(--accent-soft); color: var(--ink); padding: 1px 6px; border-radius: 6px }
 select { font: 16px var(--font-body); padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); max-width: 100% }
+/* On-screen log (ISC-65): collapsed by default so the one-bar view stays the calm default. */
+details.log { border-top: 1px solid var(--line); padding-top: 4px }
+.logbox { font: 12.5px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 6px; max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink) }
+.logbox:empty::before { content: "Nothing logged yet."; color: var(--muted) }
 pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; margin: 0; white-space: pre }
 .spinner { width: 18px; height: 18px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; flex: none }
 @keyframes spin { to { transform: rotate(360deg) } }
@@ -133,6 +137,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       <div class="bar" role="progressbar" aria-label="Overall progress" aria-valuemin="0" aria-valuemax="100" id="p-bar"><i></i></div>
       <ul class="plain" id="p-steps" style="gap:14px;margin-top:6px"></ul>
       <p class="small muted">If your PC restarts, just open PEH Lab Setup again. It picks up where it left off.</p>
+      <details class="adv log" id="p-log"><summary>Show details</summary><div class="logbox" role="log" aria-label="What setup is doing"></div></details>
     </div>
   </section>
 
@@ -160,6 +165,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       <div class="row"><button class="btn" id="e-retry">Try again</button><button class="btn quiet" id="e-copy">Copy help bundle</button></div>
       <p class="small muted">Still stuck? Paste the help bundle into the course support channel. It includes what happened, but no passwords or personal details.</p>
       <pre class="bundle" id="e-bundle" hidden></pre>
+      <details class="adv log" id="e-log"><summary>Show details</summary><div class="logbox" role="log" aria-label="What setup was doing"></div></details>
     </div>
   </section>
 
@@ -236,18 +242,24 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
     let s = store.get("peh-sim-state");
     const save = () => store.set("peh-sim-state", s);
     let timer = null;
+    const lines = []; let seq = 0;
+    const say = (text) => lines.push({ seq: ++seq, t: new Date().toISOString(), text });
     const tick = () => {
       if (!s || s.status !== "running") return;
       const id = s.plan.find((x) => s.steps[x].state !== "done");
-      if (!id) { s.status = "done"; save(); return; }
+      if (!id) { s.status = "done"; say("All steps finished. Your lab is ready."); save(); return; }
       const st = s.steps[id];
-      if (STEPS[id].needsStudent) { st.state = "needs-you"; save(); return; }
+      if (STEPS[id].needsStudent) { if (st.state !== "needs-you") say(`Waiting for you: ${STEPS[id].title}`); st.state = "needs-you"; save(); return; }
+      if (st.state !== "running") say(`Starting: ${STEPS[id].title}`);
       st.state = "running";
+      const before = st.progress;
       st.progress = Math.min(1, st.progress + 0.25 / Math.max(1, STEPS[id].minutes / 2));
+      if (Math.floor(st.progress * 4) > Math.floor(before * 4) && st.progress < 1) say(`(simulated) ${STEPS[id].title}: ${Math.floor(st.progress * 4) * 25}%`);
       if ($("#d-fail").checked && id === "kali-download" && st.progress >= 0.5) {
         st.state = "failed"; s.status = "failed";
         s.failure = { step: id, code: "SIM-kali-download", what: "Download Kali Linux stopped halfway because the download was interrupted.", todo: "Check that you're online, then press Try again. Your progress is kept." };
-      } else if (st.progress >= 1) { st.state = "done"; st.progress = 1; }
+        say(`Failed: ${STEPS[id].title} (${s.failure.code}) ${s.failure.what}`);
+      } else if (st.progress >= 1) { st.state = "done"; st.progress = 1; say(`Done: ${STEPS[id].title}`); }
       save();
     };
     const ensure = () => { if (!timer) timer = setInterval(tick, 350); };
@@ -263,7 +275,8 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
           { id: "disk", label: "Free disk space", verdict: "pass", value: "212 GB free", advice: "Plenty of room." },
         ];
       },
-      async start(profile, picks) { s = newRun(profile, picks); s.status = "running"; save(); ensure(); return s; },
+      async start(profile, picks) { s = newRun(profile, picks); s.status = "running"; say(`Setup started: ${s.plan.map((id) => STEPS[id].title).join(", ")}`); save(); ensure(); return s; },
+      async log(after) { return { lines: lines.filter((l) => l.seq > after), next: seq }; },
       async state() { return s; },
       async retry() { if (s && s.status === "failed") { $("#d-fail").checked = false; for (const id of s.plan) if (s.steps[id].state === "failed") s.steps[id] = { state: "waiting", progress: s.steps[id].progress }; delete s.failure; s.status = "running"; save(); ensure(); } return s; },
       async labs() { return { file: store.get("peh-sim-labs") ? { found: true, name: "peh-web-labs.zip", sizeMb: 412.6, verified: true } : { found: false }, pageUrl: "https://tcm-sec.com/academy/practical-ethical-hacking/" }; },
@@ -271,7 +284,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       async labsReady() { if (s && s.steps["labs-download"]) { s.steps["labs-download"] = { state: "done", progress: 1 }; save(); } return s; },
       async bundle() { return ["PEH Lab Setup: help bundle", `Created: ${new Date().toISOString()}`, "System: Windows 11 (demo)", `Profile: ${s?.profile ?? "none"} | Status: ${s?.status ?? "not started"}`, ...(s ? s.plan.map((id) => `  ${STEPS[id].title}: ${s.steps[id].state}`) : []), ...(s?.failure ? [`Error ${s.failure.code} at ${s.failure.step}: ${s.failure.what}`] : [])].join("\n"); },
       heartbeat() {},
-      reset() { s = null; store.del("peh-sim-state"); store.del("peh-sim-labs"); },
+      reset() { s = null; lines.length = 0; store.del("peh-sim-state"); store.del("peh-sim-labs"); },
     };
   }
   function newRun(profile, picks) {
@@ -293,6 +306,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       labsReady: () => post("/api/labs/ready").then((d) => d.state),
       confirm: () => post("/api/confirm").then((d) => d.state),
       bundle: () => get("/api/help-bundle").then((d) => d.text),
+      log: (after) => get(`/api/log?after=${after}`),
       heartbeat: () => post("/api/heartbeat").catch(() => {}),
       reset() {},
     };
@@ -334,6 +348,25 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       "Change it to <strong>Enabled</strong>.",
       "Choose <strong>Save and Exit</strong> (often <kbd>F10</kbd>), and let your PC restart.",
     ].map((t) => `<li>${t}</li>`).join("");
+  }
+
+  // On-screen log (ISC-65): lines go in as text, never HTML; a box follows the newest line unless scrolled up.
+  let after = 0;
+  async function pullLog() {
+    const r = await api.log(after).catch(() => null);
+    if (!r || !r.lines || r.lines.length === 0) return;
+    after = r.next;
+    for (const box of document.querySelectorAll(".logbox")) {
+      const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+      for (const l of r.lines) {
+        const row = document.createElement("div");
+        const time = new Date(l.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        row.textContent = `${time}  ${l.text}`;
+        box.append(row);
+      }
+      while (box.childElementCount > 500) box.firstElementChild.remove();
+      if (atEnd) box.scrollTop = box.scrollHeight;
+    }
   }
 
   // Progress
@@ -413,6 +446,8 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
     $("#demo").hidden = api.mode !== "demo";
     // Tell the installer this page is still open, on every screen (ISC-35).
     setInterval(() => api.heartbeat(), 15000);
+    pullLog(); setInterval(pullLog, 1500);
+    document.querySelectorAll("details.log").forEach((d) => d.addEventListener("toggle", () => { const box = d.querySelector(".logbox"); if (d.open) box.scrollTop = box.scrollHeight; }));
     renderAdvanced();
     $("#brand").innerHTML = Object.entries(BIOS).map(([k, b]) => `<option value="${k}">${b.label}</option>`).join("");
     $("#brand").addEventListener("change", renderBios);

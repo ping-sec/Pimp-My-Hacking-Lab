@@ -132,13 +132,15 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
   return {
     id: "virtualbox",
     ...STEP_INFO.virtualbox,
-    async run({ progress, signal, confirmed }) {
+    async run({ progress, signal, confirmed, log }) {
+      const say = log ?? (() => {});
       if (sys.platform !== "win32") fail("VBOX-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
       const want = parseVersion(pin.version)!;
       const have = await installedVersion(sys);
       const current = !!have && atLeast(have, want);
       const driver = () => sys.hostOnlyDriver?.() ?? "ok"; // ISC-62
-      if (current && driver() === "ok") { progress(1); return; } // ISC-14
+      say(`VirtualBox installed: ${have ? have.join(".") : "none"}; this setup uses ${pin.version}`);
+      if (current && driver() === "ok") { say("VirtualBox is already up to date; skipping the install."); progress(1); return; } // ISC-14
       // ISC-62: the detail always says which check failed, so a bundle is never silent about it.
       const netFail = (extra = ""): never => fail("VBOX-NET", "VirtualBox is installed, but its private-network driver is missing.", "Open Windows Settings > Apps, choose Oracle VirtualBox > Modify, turn on Host-Only Networking, then press Try again.", `Driver check: ${driver()} (files = VBoxNetAdp6.sys missing; store = not in Windows' driver store). ${extra}`.trim());
       // ISC-62: the pinned installer can add missing driver files to the same version, never to a newer one.
@@ -150,6 +152,7 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
       // ISC-62: VirtualBox installs the driver into Windows only on a first install (VirtualBox.wxs: NOT Installed),
       // so a driver whose files are present but unregistered is added with pnputil.
       if (driver() === "store") {
+        say("Adding VirtualBox's private-network driver to Windows (Windows will ask for permission).");
         mkdirSync(sys.cacheDir, { recursive: true });
         const outFile = join(sys.cacheDir, "pnputil.txt");
         rmSync(outFile, { force: true });
@@ -167,7 +170,9 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
         const dest = join(sys.cacheDir, pin.file);
         if (!(existsSync(dest) && (await sha256File(dest)) === pin.sha256)) {
           rmSync(dest, { force: true });
-          await downloadResumable(sys, pin.url, dest, { signal, code: "VBOX-DL", label: "VirtualBox", progress: (f) => progress(0.02 + 0.68 * f) }); // ISC-38..40
+          say(`Downloading VirtualBox ${pin.version} from Oracle.`);
+          await downloadResumable(sys, pin.url, dest, { signal, log: say, code: "VBOX-DL", label: "VirtualBox", progress: (f) => progress(0.02 + 0.68 * f) }); // ISC-38..40
+          say("VirtualBox download checked: SHA-256 matches.");
           if ((await sha256File(dest)) !== pin.sha256) { // ISC-15
             rmSync(dest, { force: true });
             fail("VBOX-SHA", "The VirtualBox download was damaged on the way, so we threw it away.", "Press Try again to download a fresh copy.");
@@ -175,6 +180,7 @@ export function virtualboxStep(sys: Sys, pin: Pin): Step {
         }
         progress(0.75);
 
+        say("Running the VirtualBox installer (Windows will ask for permission).");
         const r = await sys.exec(installerCommand(dest)); // ISC-16
         const out = `${r.stdout}\n${r.stderr}`;
         if (r.code !== 0) {

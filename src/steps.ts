@@ -23,6 +23,8 @@ export interface StepContext {
   signal: AbortSignal;
   /** The student already said yes to this step's question (ISC-49). */
   confirmed?: boolean;
+  /** One plain line for the on-screen log and the help bundle (ISC-63). */
+  log?(line: string): void;
 }
 
 /** A step that must not go on without the student's yes throws `{ question }` (ISC-46). */
@@ -108,9 +110,12 @@ export function simulatedStep(id: StepId, msPerMinute = 200, failAt?: StepId): S
     ...info,
     async run(ctx) {
       const total = Math.max(1, info.minutes * msPerMinute), tick = 50;
+      let said = -1;
       for (let t = 0; t <= total; t += tick) {
         if (ctx.signal.aborted) throw new Error("stopped");
         ctx.progress(Math.min(1, t / total));
+        const quarter = Math.floor((4 * t) / total);
+        if (quarter > said && quarter < 4) { said = quarter; ctx.log?.(`(simulated) ${info.title}: ${quarter * 25}%`); }
         if (failAt === id && t >= total / 2) {
           const failure: StepFailure = { code: `SIM-${id}`, what: `${info.title} stopped halfway because the download was interrupted.`, todo: "Check that you're online, then press Try again. Your progress is kept." };
           throw Object.assign(new Error(failure.what), { failure });

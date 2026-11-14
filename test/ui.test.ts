@@ -37,3 +37,16 @@ describe("UI", () => {
     expect(html).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important\s*\}/);
   });
 });
+
+describe("on-screen log (F13)", () => {
+  test("ISC-65 progress and error screens have a collapsed Show details panel filled as text, following the newest line", () => {
+    for (const id of ["p-log", "e-log"]) {
+      expect(html).toMatch(new RegExp(`<details class="adv log" id="${id}"><summary>Show details</summary>`));
+      expect(html).not.toMatch(new RegExp(`id="${id}" open`));
+    }
+    expect(html).toContain('get(`/api/log?after=${after}`)');
+    expect(html).toMatch(/row\.textContent = /);
+    expect(html).not.toMatch(/innerHTML[^;\n]*\.text\b/);
+    expect(html).toMatch(/scrollHeight - box\.scrollTop - box\.clientHeight/);
+  });
+});
