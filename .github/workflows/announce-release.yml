@@ -1,0 +1,46 @@
+# Posts each published release to the Discord #announcements channel.
+# Needs the repository secret DISCORD_WEBHOOK_URL; without it the job only prints what it would send.
+# Run it by hand (Actions > Announce release on Discord > Run workflow) to re-announce the newest release.
+name: Announce release on Discord
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_RELEASE: ${{ toJSON(github.event.release) }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            rel="$EVENT_RELEASE"
+          else
+            rel="$(gh api "repos/$REPO/releases?per_page=1" --jq '.[0]')"
+          fi
+          payload="$(jq -n --argjson r "$rel" '{
+            allowed_mentions: { parse: [] },
+            content: (if $r.prerelease then "🧪 New Pimp My Hacking Lab testing build" else "🚀 New Pimp My Hacking Lab release" end),
+            embeds: [{
+              title: (($r.name // $r.tag_name) | .[0:256]),
+              url: $r.html_url,
+              description: (($r.body // "") | .[0:700])
+            }]
+          }')"
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "No DISCORD_WEBHOOK_URL set; would send:"
+            echo "$payload"
+            exit 0
+          fi
+          code="$(curl -sS -o /tmp/discord.txt -w '%{http_code}' -H 'content-type: application/json' -d "$payload" "$DISCORD_WEBHOOK_URL")"
+          if [ "$code" -ge 300 ]; then echo "::warning::Discord answered $code: $(head -c 200 /tmp/discord.txt)"; else echo "Posted to Discord ($code)."; fi
