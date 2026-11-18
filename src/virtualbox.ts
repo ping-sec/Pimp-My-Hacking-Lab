@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:f
 import { dirname, join, win32 } from "node:path";
 import { downloadResumable, sha256File } from "./download";
 import type { Pin } from "./pins";
+import { VBOX_MANAGE_PATHS } from "./linux";
 import { STEP_INFO, type Step, type StepFailure, type StepQuestion } from "./steps";
 
 export interface Sys {
@@ -35,18 +36,24 @@ function registryInstallDir(): string | null {
   } catch { return null; }
 }
 
-export function realSys(cacheDir: string, o: { env?: Record<string, string | undefined>; regInstallDir?: () => string | null } = {}): Sys {
+export function realSys(cacheDir: string, o: { env?: Record<string, string | undefined>; regInstallDir?: () => string | null; platform?: string } = {}): Sys {
   const env = o.env ?? process.env;
+  const os = o.platform ?? process.platform;
   const reg = o.regInstallDir ?? registryInstallDir;
   let found: string | null = null, searched: string[] = [];
   const vboxManagePath = () => {
     if (found) return found; // ISC-58: kept for the run once found
+    if (os === "linux") { // ISC-75
+      searched = [...VBOX_MANAGE_PATHS];
+      for (const p of searched) if (existsSync(p)) return (found = p);
+      return null;
+    }
     searched = [...new Set([reg(), env.VBOX_MSI_INSTALL_PATH, env.ProgramFiles && join(env.ProgramFiles, "Oracle", "VirtualBox"), "C:\\Program Files\\Oracle\\VirtualBox"].filter(Boolean) as string[])];
     for (const d of searched) { const p = join(d, "VBoxManage.exe"); if (existsSync(p)) return (found = p); }
     return null;
   };
   return {
-    platform: process.platform,
+    platform: os,
     env,
     cacheDir,
     vboxManagePath,
@@ -76,9 +83,9 @@ export function parseVersion(s: string): number[] | null {
   const m = s.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
   return m ? m.slice(1, 4).map(Number) : null;
 }
-const atLeast = (have: number[], want: number[]) => { for (let i = 0; i < 3; i++) if (have[i] !== want[i]) return have[i] > want[i]; return true; };
+export const atLeast = (have: number[], want: number[]) => { for (let i = 0; i < 3; i++) if (have[i] !== want[i]) return have[i] > want[i]; return true; };
 
-async function installedVersion(sys: Sys): Promise<number[] | null> {
+export async function installedVersion(sys: Sys): Promise<number[] | null> {
   const exe = sys.vboxManagePath();
   if (!exe) return null;
   const r = await sys.exec([exe, "--version"]);
@@ -97,7 +104,7 @@ async function runningVms(sys: Sys, exe: string): Promise<string[]> {
  * An older VirtualBox is upgraded only after the student says yes, and never while a VM runs (ISC-46..48).
  * Keeping the old version is not offered: the PimpMyKali step relies on 7.2 behaviour (ISC-43).
  */
-async function confirmUpgrade(sys: Sys, have: number[], pin: Pin, confirmed: boolean): Promise<void> {
+export async function confirmUpgrade(sys: Sys, have: number[], pin: Pin, confirmed: boolean): Promise<void> {
   const exe = sys.vboxManagePath()!;
   const from = have.join("."), running = await runningVms(sys, exe);
   const pack = /Extension Packs:\s*[1-9]/.test((await sys.exec([exe, "list", "extpacks"])).stdout) ? " Your Extension Pack will need updating to match afterwards." : "";

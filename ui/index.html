@@ -175,6 +175,7 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
       <h1>Before we continue</h1>
       <div class="callout warn"><p id="q-what"></p></div>
       <div class="callout info"><p id="q-todo"></p></div>
+      <ol class="howto" id="q-steps" hidden></ol>
       <div class="row"><button class="btn" id="q-yes">Upgrade VirtualBox</button></div>
       <p class="small muted">Not ready yet? Close this page. Open PEH Lab Setup again whenever you are, and it picks up right here.</p>
     </div>
@@ -425,6 +426,9 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
     show("ask");
     $("#q-what").textContent = q.what;
     $("#q-todo").textContent = q.todo;
+    // ISC-71: the how-to goes in as text nodes, never HTML.
+    const list = $("#q-steps"); list.replaceChildren(...(q.steps ?? []).map((t) => { const li = document.createElement("li"); li.textContent = t; return li; }));
+    list.hidden = !(q.steps && q.steps.length);
     $("#q-yes").textContent = q.confirm;
     $("#q-yes").disabled = false;
   }
@@ -444,6 +448,8 @@ pre.bundle { font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px
   async function boot() {
     api = await fetch("/api/health", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => (d && d.mode === "local" ? localBackend() : simBackend())).catch(() => simBackend());
     $("#demo").hidden = api.mode !== "demo";
+    // ISC-76: the installer's step text is the platform's (Ubuntu asks for a password, Windows for permission).
+    if (api.mode === "local") { try { const p = await fetch("/api/profiles", { cache: "no-store" }).then((r) => r.json()); if (p && p.steps) Object.assign(STEPS, p.steps); } catch {} }
     // Tell the installer this page is still open, on every screen (ISC-35).
     setInterval(() => api.heartbeat(), 15000);
     pullLog(); setInterval(pullLog, 1500);

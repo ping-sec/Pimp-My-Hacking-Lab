@@ -32,7 +32,7 @@ const errText = (r: { stdout: string; stderr: string }) => (r.stderr || r.stdout
 function manage(sys: Sys): string {
   const exe = sys.vboxManagePath();
   if (exe) return exe;
-  throw Object.assign(new Error("no VirtualBox"), { failure: { code: "PMK-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be fixed up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox", detail: `Looked for VBoxManage.exe in: ${(sys.vboxSearched?.() ?? []).join("; ") || "nowhere"}` } satisfies StepFailure }); // ISC-57, ISC-58
+  throw Object.assign(new Error("no VirtualBox"), { failure: { code: "PMK-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be fixed up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox", detail: `Looked for VBoxManage in:${(sys.vboxSearched?.() ?? []).join("; ") || "nowhere"}` } satisfies StepFailure }); // ISC-57, ISC-58
 }
 async function vm(sys: Sys, args: string[]) { return sys.exec([manage(sys), ...args]); }
 async function vmState(sys: Sys): Promise<string> {
@@ -150,7 +150,7 @@ export function pimpmykaliStep(sys: Sys, pin: Pin, opts: { bootTimeoutMs?: numbe
     ...STEP_INFO.pimpmykali,
     async run({ progress, signal, log }) {
       const say = log ?? (() => {});
-      if (sys.platform !== "win32") fail("PMK-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
+      if (sys.platform !== "win32" && sys.platform !== "linux") fail("PMK-OS", "This installer works on Windows and Ubuntu.", "Run Pimp My Hacking Lab on a Windows or Ubuntu PC.");
       const marker = join(sys.cacheDir, PMK_DONE);
       if (existsSync(marker)) { say("The Kali fixes already ran; skipping."); progress(1); return; } // ISC-30 re-runs skip
 

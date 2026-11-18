@@ -1,14 +1,15 @@
 {
   "name": "pimp-my-hacking-lab",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun src/server.ts",
     "test": "bun test",
     "build:win": "bun build src/server.ts --compile --minify --target=bun-windows-x64 --windows-hide-console --outfile dist/peh-lab-setup.exe",
-    "build:linux": "bun build src/server.ts --compile --minify --outfile dist/peh-lab-setup"
+    "build:linux": "bun build src/server.ts --compile --minify --target=bun-linux-x64-baseline --outfile dist/peh-lab-setup",
+    "build:deb": "bun scripts/build-deb.ts"
   },
-  "description": "One-click Windows setup for a beginner ethical hacking lab: VirtualBox, Kali, PimpMyKali.",
+  "description": "One-click setup for a beginner ethical hacking lab on Windows or Ubuntu 24.04: VirtualBox, Kali, PimpMyKali.",
   "license": "MIT"
 }

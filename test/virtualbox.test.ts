@@ -146,7 +146,7 @@ describe("VBoxManage lookup", () => {
   test("ISC-58 found from the registry InstallDir, kept once found, and every searched folder is listed", () => {
     const d = mkdtempSync(join(tmpdir(), "vbm-")); dirs.push(d);
     let regCalls = 0;
-    const sys = realSys(d, { env: {}, regInstallDir: () => { regCalls++; return d; } });
+    const sys = realSys(d, { env: {}, platform: "win32", regInstallDir: () => { regCalls++; return d; } });
     expect(sys.vboxManagePath()).toBeNull();
     expect(sys.vboxSearched!()).toContain(d);
     expect(sys.vboxSearched!().some((p) => p.includes("Oracle"))).toBe(true);

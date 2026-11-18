@@ -10,6 +10,16 @@ export const VIRTUALBOX: Pin = {
   pinnedAt: "2026-11-12",
 };
 
+/** Oracle's Ubuntu 24.04 (noble) package of the same version; SHA-256 from Oracle's 7.2.22 SHA256SUMS (ISC-68). */
+export const VIRTUALBOX_NOBLE: Pin = {
+  version: "7.2.22",
+  build: "175245",
+  file: "virtualbox-7.2_7.2.22-175245~Ubuntu~noble_amd64.deb",
+  url: "https://download.virtualbox.org/virtualbox/7.2.22/virtualbox-7.2_7.2.22-175245~Ubuntu~noble_amd64.deb",
+  sha256: "426f192dc4515cd02a687a39408c0b6b0d7741de77ff7c345efd92e6090c96ee",
+  pinnedAt: "2026-11-17",
+};
+
 /** Kali's pre-built VirtualBox image; SHA-256 from https://cdimage.kali.org/kali-2026.3/SHA256SUMS. */
 export const KALI: Pin = {
   version: "2026.3",

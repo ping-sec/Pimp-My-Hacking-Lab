@@ -54,10 +54,11 @@ export function kaliDownloadStep(sys: Sys, kali: Pin, sevenzr: Pin): Step {
     ...STEP_INFO["kali-download"],
     async run({ progress, signal, log }) {
       const say = log ?? (() => {});
-      if (sys.platform !== "win32") fail("KALI-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
+      if (sys.platform !== "win32" && sys.platform !== "linux") fail("KALI-OS", "This installer works on Windows and Ubuntu.", "Run Pimp My Hacking Lab on a Windows or Ubuntu PC.");
       if (existsSync(join(extractDir(sys), DONE_MARK)) && findVbox(sys)) { say("Kali is already downloaded and unpacked."); progress(1); return; } // ISC-21 reuse
       const archive = await fetchVerified(sys, kali, "KALI", "Kali Linux", progress, 0, 0.85, signal, say);
-      const seven = await fetchVerified(sys, sevenzr, "KALI", "the 7-Zip extractor", progress, 0.85, 0.87, signal, say);
+      // ISC-75: on Ubuntu the VirtualBox step installed Ubuntu's own signed 7zip package.
+      const seven = sys.platform === "linux" ? "7z" : await fetchVerified(sys, sevenzr, "KALI", "the 7-Zip extractor", progress, 0.85, 0.87, signal, say);
       say("Unpacking Kali (this can take a few minutes).");
       rmSync(extractDir(sys), { recursive: true, force: true });
       mkdirSync(extractDir(sys), { recursive: true });
@@ -74,7 +75,7 @@ export function kaliDownloadStep(sys: Sys, kali: Pin, sevenzr: Pin): Step {
 
 async function vbox(sys: Sys, args: string[], code: string, what: string): Promise<string> {
   const exe = sys.vboxManagePath();
-  if (!exe) throw Object.assign(new Error("no VirtualBox"), { failure: { code: "KALI-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be set up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox", detail: `Looked for VBoxManage.exe in: ${(sys.vboxSearched?.() ?? []).join("; ") || "nowhere"}` } satisfies StepFailure }); // ISC-57, ISC-58
+  if (!exe) throw Object.assign(new Error("no VirtualBox"), { failure: { code: "KALI-NOVBOX", what: "VirtualBox isn't on this PC anymore, so Kali can't be set up.", todo: "Press Try again. Setup installs VirtualBox again first.", redo: "virtualbox", detail: `Looked for VBoxManage in:${(sys.vboxSearched?.() ?? []).join("; ") || "nowhere"}` } satisfies StepFailure }); // ISC-57, ISC-58
   const r = await sys.exec([exe, ...args]);
   if (r.code !== 0) fail(code, what, "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", (r.stderr || r.stdout).trim()); // ISC-45
   return r.stdout;
@@ -86,10 +87,10 @@ async function hostOnlyAdapter(sys: Sys): Promise<string> {
   const list = await vbox(sys, ["list", "hostonlyifs"], "KALI-NET", "The private lab network couldn't be checked.");
   const existing = list.match(/^Name:\s+(.+)$/m)?.[1]?.trim();
   if (existing) return existing;
-  const created = await sys.exec([sys.vboxManagePath() ?? "VBoxManage.exe", "hostonlyif", "create"]);
+  const created = await sys.exec([sys.vboxManagePath() ?? (sys.platform === "linux" ? "VBoxManage" : "VBoxManage.exe"), "hostonlyif", "create"]);
   const text = `${created.stdout}\n${created.stderr}`.trim();
   if (/Host Interface Networking driver/i.test(text)) { // ISC-62: VirtualBox was installed without its host-only driver
-    throw Object.assign(new Error("no host-only driver"), { failure: { code: "KALI-NET", what: "VirtualBox's private-network driver is missing, so the lab network couldn't be created.", todo: "Press Try again. Setup adds the driver to VirtualBox first (Windows asks once).", detail: text.slice(-600), redo: "virtualbox" } satisfies StepFailure });
+    throw Object.assign(new Error("no host-only driver"), { failure: { code: "KALI-NET", what: "VirtualBox's private-network driver is missing, so the lab network couldn't be created.", todo: sys.platform === "linux" ? "Press Try again. Setup finishes VirtualBox's setup first." : "Press Try again. Setup adds the driver to VirtualBox first (Windows asks once).", detail: text.slice(-600), redo: "virtualbox" } satisfies StepFailure });
   }
   if (created.code !== 0) fail("KALI-NET", "The private lab network couldn't be created.", "Restart your PC, open PEH Lab Setup, and press Try again. If it fails again, copy the help bundle.", text.slice(-600));
   const out = created.stdout;
@@ -113,7 +114,7 @@ export function kaliImportStep(sys: Sys, kali: Pin): Step {
     ...STEP_INFO["kali-import"],
     async run({ progress, log }) {
       const say = log ?? (() => {});
-      if (sys.platform !== "win32") fail("KALI-OS", "This installer only works on Windows.", "Run PEH Lab Setup on your Windows PC.");
+      if (sys.platform !== "win32" && sys.platform !== "linux") fail("KALI-OS", "This installer works on Windows and Ubuntu.", "Run Pimp My Hacking Lab on a Windows or Ubuntu PC.");
       const before = await vbox(sys, ["list", "vms"], "KALI-IMPORT", "VirtualBox didn't answer.");
       if (hasVm(before, KALI_VM_NAME)) {
         // ISC-44: never re-register; finish a half-done import unless Kali is running right now.

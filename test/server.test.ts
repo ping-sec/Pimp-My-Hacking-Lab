@@ -9,7 +9,8 @@ import { PROFILES, STEP_INFO, planFor, simulatedStep, type Step } from "../src/s
 const dirs: string[] = [];
 function cfg(over: Partial<Config> = {}): Config {
   const d = mkdtempSync(join(tmpdir(), "peh-")); dirs.push(d);
-  return { ...defaultConfig(), stateDir: join(d, "state"), downloadsDir: join(d, "dl"), msPerMinute: 2, ...over };
+  // Simulated steps and Windows checks wherever the tests run, so a Linux test box never installs anything (F14).
+  return { ...defaultConfig(), realSteps: new Set(), platform: "win32", stateDir: join(d, "state"), downloadsDir: join(d, "dl"), msPerMinute: 2, ...over };
 }
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const until = async (f: () => boolean, ms = 5000) => { const t = Date.now(); while (!f()) { if (Date.now() - t > ms) throw new Error("timeout"); await Bun.sleep(10); } };

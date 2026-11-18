@@ -7,15 +7,16 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { homedir, hostname, platform, release, totalmem, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import uiHtml from "../ui/index.html" with { type: "text" };
-import { PROFILES, STEP_INFO, planFor, simulatedStep, type ProfileId, type Step, type StepFailure, type StepId, type StepQuestion } from "./steps";
-import { KALI, PIMPMYKALI, SEVENZR, VIRTUALBOX } from "./pins";
+import { PROFILES, STEP_INFO, planFor, simulatedStep, stepInfo, type ProfileId, type Step, type StepFailure, type StepId, type StepQuestion } from "./steps";
+import { KALI, PIMPMYKALI, SEVENZR, VIRTUALBOX, VIRTUALBOX_NOBLE } from "./pins";
 import { pimpmykaliStep } from "./pimpmykali";
 import { IDLE_EXIT_MS, clearInstance, existingInstance, shouldExit, writeInstance } from "./lifecycle";
 import { kaliDownloadStep, kaliImportStep } from "./kali";
 import { realSys, virtualboxStep } from "./virtualbox";
+import { hasHardwareVirt, isUbuntu2404, linuxVirtualboxStep, realLinuxHost } from "./linux";
 
 export type Verdict = "pass" | "warn" | "fail" | "unknown";
-export interface Check { id: "virtualization" | "ram" | "disk"; label: string; verdict: Verdict; value: string; advice: string }
+export interface Check { id: "virtualization" | "ram" | "disk" | "secureboot" | "system"; label: string; verdict: Verdict; value: string; advice: string }
 export type StepState = "waiting" | "running" | "done" | "failed" | "needs-you";
 export interface RunState {
   profile: ProfileId;
@@ -27,6 +28,8 @@ export interface RunState {
   question?: StepQuestion & { step: StepId };
   /** Steps the student said yes to; kept across restarts. */
   confirmed?: StepId[];
+  /** "<step>:<question code>" the student said yes to since that question was last asked (ISC-71). */
+  answered?: string[];
   startedAt?: string;
   updatedAt?: string;
 }
@@ -45,7 +48,12 @@ export interface Config {
   realSteps: Set<StepId>;
   /** Test hook: overrides the virtualization probe. */
   virtualizationProbe?: () => Promise<VirtReading>;
+  /** The OS the checks and step text are for; defaults to this one. */
+  platform?: string;
+  /** Test hook: what a Linux PC reports (ISC-74). */
+  linuxProbe?: () => LinuxReading;
 }
+export interface LinuxReading { osRelease: string; cpuinfo: string; secureBoot: boolean | null }
 
 export function defaultConfig(): Config {
   const home = homedir();
@@ -57,7 +65,7 @@ export function defaultConfig(): Config {
     labsSha256: null,
     labsPageUrl: "https://tcm-sec.com/academy/practical-ethical-hacking/",
     msPerMinute: Number(process.env.PEH_SIM_MS_PER_MIN ?? 400),
-    realSteps: new Set(platform() === "win32" && !process.argv.includes("--simulate") ? ["virtualbox", "kali-download", "kali-import", "pimpmykali"] : []),
+    realSteps: new Set((platform() === "win32" || platform() === "linux") && !process.argv.includes("--simulate") ? ["virtualbox", "kali-download", "kali-import", "pimpmykali"] : []),
   };
 }
 
@@ -79,12 +87,32 @@ async function windowsVirtualization(): Promise<VirtReading> {
   } catch { return { firmware: null, hypervisor: null }; }
 }
 
+function linuxReading(): LinuxReading {
+  const host = realLinuxHost(realSys(""));
+  return { osRelease: host.osRelease(), cpuinfo: host.cpuinfo(), secureBoot: host.secureBoot() };
+}
+
+/** Ubuntu's checks (ISC-74): CPU flags for virtualization, Secure Boot as a heads-up never a blocker, and the version. */
+function linuxChecks(l: LinuxReading): Check[] {
+  const name = l.osRelease.match(/^PRETTY_NAME="?([^"\n]+)"?$/m)?.[1] ?? "Linux";
+  return [
+    hasHardwareVirt(l.cpuinfo)
+      ? { id: "virtualization", label: "Virtualization", verdict: "pass", value: "Turned on", advice: "Ready." }
+      : { id: "virtualization", label: "Virtualization", verdict: "fail", value: "Turned off", advice: "Your PC needs one setting turned on before the lab can run. We'll show you how." },
+    l.secureBoot === true
+      ? { id: "secureboot", label: "Secure Boot", verdict: "warn", value: "On", advice: "That's fine. After VirtualBox installs, your PC restarts once and you approve its driver on a blue screen with a password we give you." }
+      : { id: "secureboot", label: "Secure Boot", verdict: "pass", value: l.secureBoot === false ? "Off" : "Not used", advice: "Nothing extra to do." },
+    { id: "system", label: "System", verdict: isUbuntu2404(l.osRelease) ? "pass" : "warn", value: name, advice: isUbuntu2404(l.osRelease) ? "Ready." : "This version is built for Ubuntu 24.04. It may still work, but it hasn't been tested on yours." },
+  ];
+}
+
 export async function pcCheck(cfg: Config): Promise<Check[]> {
   const ramGb = totalmem() / 1024 ** 3;
   let freeGb = NaN;
   try { const s = statfsSync(existsSync(cfg.downloadsDir) ? cfg.downloadsDir : homedir()); freeGb = (s.bavail * s.bsize) / 1024 ** 3; } catch { /* unknown */ }
-  const r = await (cfg.virtualizationProbe ?? windowsVirtualization)();
-  const virtCheck: Check = r.hypervisor === true
+  const linux = (cfg.platform ?? platform()) === "linux" ? linuxChecks((cfg.linuxProbe ?? linuxReading)()) : null;
+  const r = linux ? { firmware: null, hypervisor: null } : await (cfg.virtualizationProbe ?? windowsVirtualization)();
+  const virtCheck: Check = linux ? linux[0]! : r.hypervisor === true
     ? { id: "virtualization", label: "Virtualization", verdict: "pass", value: "Turned on", advice: "Ready. Windows is already using it for its own features, so VirtualBox may run a little slower. That's fine for the course." }
     : r.firmware === true
       ? { id: "virtualization", label: "Virtualization", verdict: "pass", value: "Turned on", advice: "Ready." }
@@ -105,6 +133,7 @@ export async function pcCheck(cfg: Config): Promise<Check[]> {
       value: Number.isNaN(freeGb) ? "Couldn't tell" : `${Math.round(freeGb)} GB free`,
       advice: Number.isNaN(freeGb) ? "Make sure you have about 80 GB free." : freeGb >= 80 ? "Plenty of room." : freeGb >= 50 ? "Enough, but it will be tight." : "The lab needs about 80 GB. Free up space first.",
     },
+    ...(linux ? linux.slice(1) : []),
   ];
 }
 
@@ -177,7 +206,7 @@ export function helpBundle(state: RunState | null, checks: Check[] | null, log: 
 function realStep(cfg: Config, id: StepId): Step | null {
   if (!cfg.realSteps.has(id)) return null;
   const sys = realSys(join(cfg.stateDir, "downloads"));
-  if (id === "virtualbox") return virtualboxStep(sys, VIRTUALBOX);
+  if (id === "virtualbox") return sys.platform === "linux" ? linuxVirtualboxStep(sys, realLinuxHost(sys), VIRTUALBOX_NOBLE) : virtualboxStep(sys, VIRTUALBOX);
   if (id === "kali-download") return kaliDownloadStep(sys, KALI, SEVENZR);
   if (id === "kali-import") return kaliImportStep(sys, KALI);
   if (id === "pimpmykali") return pimpmykaliStep(sys, PIMPMYKALI);
@@ -263,6 +292,7 @@ export class Runner {
     if (!s?.question) return s;
     const id = s.question.step;
     s.confirmed = [...new Set([...(s.confirmed ?? []), id])];
+    s.answered = [...new Set([...(s.answered ?? []), `${id}:${s.question.code}`])];
     delete s.question;
     s.steps[id] = { state: "waiting", progress: 0 };
     saveState(this.cfg, s);
@@ -298,7 +328,8 @@ export class Runner {
       this.log(`Starting: ${title}`);
       try {
         let last = 0;
-        await this.makeStep(id).run({ signal: this.abort.signal, confirmed: s.confirmed?.includes(id) ?? false, log: (line) => this.log(line), progress: (f) => { s.steps[id].progress = f; if (f - last >= 0.1 || f === 1) { last = f; saveState(this.cfg, s); } } });
+        const answered = (s.answered ?? []).filter((a) => a.startsWith(`${id}:`)).map((a) => a.slice(id.length + 1));
+        await this.makeStep(id).run({ signal: this.abort.signal, confirmed: s.confirmed?.includes(id) ?? false, answered, log: (line) => this.log(line), progress: (f) => { s.steps[id].progress = f; if (f - last >= 0.1 || f === 1) { last = f; saveState(this.cfg, s); } } });
         this.log(`Done: ${title}`);
         s.steps[id] = { state: "done", progress: 1 };
         saveState(this.cfg, s);
@@ -308,6 +339,7 @@ export class Runner {
           this.log(`Question for you: ${q.what}`);
           s.steps[id] = { state: "needs-you", progress: 0 };
           s.question = { ...q, step: id };
+          s.answered = (s.answered ?? []).filter((a) => a !== `${id}:${q.code}`); // ISC-71: a yes counts only for the latest ask
           saveState(this.cfg, s);
           return; // waits for confirm()
         }
@@ -348,7 +380,7 @@ export function createApp(cfg: Config) {
       case "GET /": return new Response(page(), { headers: { "content-type": "text/html; charset=utf-8" } });
       case "GET /api/health": return json({ ok: true, mode: "local" });
       case "POST /api/heartbeat": return json({ ok: true });
-      case "GET /api/profiles": return json({ profiles: PROFILES, steps: STEP_INFO });
+      case "GET /api/profiles": return json({ profiles: PROFILES, steps: stepInfo(cfg.platform ?? platform()) }); // ISC-76
       case "GET /api/check": return json({ checks: (lastChecks = await pcCheck(cfg)) });
       case "GET /api/state": return json({ state: runner.state });
       case "POST /api/start": { const b = await req.json().catch(() => ({})) as { profile?: ProfileId; picks?: StepId[] }; return json({ state: runner.start(b.profile && b.profile in PROFILES ? b.profile : "full", b.picks) }); }
@@ -371,6 +403,7 @@ if (import.meta.main) {
   if (running) { openBrowser(running); process.exit(0); }
   if (process.argv.includes("--demo-fail")) cfg.failAt = "kali-download";
   const app = createApp(cfg);
+  if (platform() === "linux") realLinuxHost(realSys("")).resumeAtLogin(false); // ISC-71: opened again after the restart; once is enough
   app.runner.resume();
   const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PEH_PORT ?? 0), fetch: app.handle });
   const url = `http://127.0.0.1:${server.port}/`;

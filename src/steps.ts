@@ -23,6 +23,8 @@ export interface StepContext {
   signal: AbortSignal;
   /** The student already said yes to this step's question (ISC-49). */
   confirmed?: boolean;
+  /** Codes of this step's questions the student said yes to since each was last asked (ISC-71). */
+  answered?: string[];
   /** One plain line for the on-screen log and the help bundle (ISC-63). */
   log?(line: string): void;
 }
@@ -36,6 +38,8 @@ export interface StepQuestion {
   todo: string;
   /** The button that says yes; pressing it re-runs the step with `confirmed`, which checks again. */
   confirm: string;
+  /** Numbered how-to, shown as plain text (ISC-71). */
+  steps?: string[];
 }
 
 export interface StepFailure {
@@ -89,6 +93,12 @@ export const PROFILES: Record<ProfileId, { title: string; detail: string; steps:
     steps: ["labs-download", "labs-start", "snapshot", "final-check"],
   },
 };
+
+/** Step text as this platform's student sees it: Ubuntu asks for a password where Windows asks for permission (ISC-76). */
+export function stepInfo(platform: string): Record<StepId, Omit<Step, "run" | "id">> {
+  if (platform !== "linux") return STEP_INFO;
+  return { ...STEP_INFO, virtualbox: { ...STEP_INFO.virtualbox, detail: "The free program that runs your lab computers. Ubuntu will ask for your password." } };
+}
 
 const ORDER: StepId[] = PROFILES.full.steps;
 
